@@ -1,0 +1,3 @@
+[submodule "nowide"]
+	path = nowide
+	url = https://github.com/nephatrine/nowide-standalone.git

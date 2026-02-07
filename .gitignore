@@ -1,0 +1,6 @@
+.vs*
+.cache
+.zed
+build*
+out
+gen
