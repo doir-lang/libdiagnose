@@ -1,3 +1,4 @@
 [submodule "nowide"]
 	path = nowide
-	url = https://github.com/nephatrine/nowide-standalone.git
+	url = https://github.com/boostorg/nowide.git
+	branch = standalone
