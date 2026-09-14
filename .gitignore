@@ -1,0 +1,9 @@
+.dub/
+dub.selections.json
+*.o
+*.obj
+*.lst
+*.a
+*.lib
+diagnose-example*
+diagnose-test*

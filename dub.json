@@ -1,0 +1,40 @@
+{
+    "name": "diagnose",
+    "description": "Ariadne-style compiler diagnostics for -betterC D",
+    "license": "MIT",
+    "targetType": "staticLibrary",
+    "sourcePaths": ["source"],
+    "importPaths": ["source"],
+    "dependencies": {
+        "libfp": {
+            "repository": "git+https://github.com/doir-lang/libfp.git",
+            "version": "487865f18f15a9c2ce5feb70f339ece7215332c9"
+        }
+    },
+    "dflags-ldc": ["-betterC", "-checkaction=C"],
+    "dflags-dmd": ["-betterC", "-checkaction=C"],
+    "configurations": [
+        {
+            "name": "library",
+            "targetType": "staticLibrary"
+        },
+        {
+            "name": "example",
+            "targetType": "executable",
+            "targetName": "diagnose-example",
+            "mainSourceFile": "examples/example.d",
+            "sourcePaths": ["source", "examples"],
+            "importPaths": ["source", "examples"]
+        },
+        {
+            "name": "unittest",
+            "targetType": "executable",
+            "targetName": "diagnose-test",
+            "mainSourceFile": "tests/runner.d",
+            "sourcePaths": ["source", "tests"],
+            "importPaths": ["source", "tests"],
+            "dflags-ldc": ["-betterC", "-checkaction=C"],
+            "dflags-dmd": ["-betterC", "-checkaction=C"]
+        }
+    ]
+}
