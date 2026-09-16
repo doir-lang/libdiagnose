@@ -5,7 +5,7 @@ import fp.dynarray : pushBack;
 import core.stdc.stdio : fputs, stdout;
 
 extern (C) int main() {
-	enableAnsiColors();
+	enableAnsiColorsAndUTF8();
 	Manager manager;
 	scope (exit) free(manager);
 

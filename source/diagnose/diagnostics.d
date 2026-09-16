@@ -21,7 +21,7 @@ version (Windows) import core.sys.windows.windows;
 /// translation layer to enable — instead the console's active output code
 /// page is switched to UTF-8 so the raw bytes we write are interpreted
 /// correctly rather than through the legacy ANSI/OEM code page.
-void enableAnsiColors() {
+void enableAnsiColorsAndUTF8() @nogc nothrow {
 	version (Windows) {
 		SetConsoleOutputCP(CP_UTF8);
 
@@ -183,8 +183,15 @@ struct Manager {
 	@nogc nothrow:
 
 	/// Registers (or replaces) the source text associated with `filename`.
-	/// Both are stored as non-owning slices, so the memory they point into
-	/// must outlive this manager.
+	///
+	/// Both are stored as non-owning slices: rendering reads straight out of
+	/// the caller's buffers rather than copying a whole translation unit per
+	/// diagnostic. That makes the registration a borrow, and the borrow has to
+	/// end before the memory behind it does -- a registration left in place
+	/// past the lifetime of its buffer dangles, and the next `registerSource`
+	/// reads it while comparing filenames. Callers end the borrow with
+	/// `deregisterSource` when a single file's storage goes away, or with
+	/// `clear` when starting a fresh compile.
 	void registerSource(const(char)[] filename, const(char)[] source) @trusted {
 		foreach (i; 0 .. daLength(sourceFiles))
 			if (sourceFiles[i].filename == filename) {
@@ -192,6 +199,21 @@ struct Manager {
 				return;
 			}
 		pushBack(sourceFiles, SourceFile(filename, source));
+	}
+
+	/// Drops the registration for `filename`, if there is one, and reports
+	/// whether anything was removed. Call this just before freeing the storage
+	/// a registered `filename`/`source` pointed into: what stays behind is only
+	/// the borrow, so leaving it in place is what makes a later render or
+	/// `registerSource` read freed memory. Diagnostics already pushed against
+	/// the file are kept -- they render with the "source unavailable" note.
+	bool deregisterSource(const(char)[] filename) @trusted {
+		foreach (i; 0 .. daLength(sourceFiles))
+			if (sourceFiles[i].filename == filename) {
+				deleteRange(sourceFiles, i, 1, false);
+				return true;
+			}
+		return false;
 	}
 
 	/// Takes ownership of `diag` -- don't use or free it again after this call.
@@ -208,12 +230,22 @@ struct Manager {
 
 	size_t count() const @trusted { return daLength(diagnostics); }
 
-	/// Frees every pushed diagnostic's owned memory and empties the list
-	/// (registered source texts, being non-owning views, are untouched).
+	/// Frees every pushed diagnostic's owned memory and empties the list, and
+	/// drops the registered source texts along with it.
+	///
+	/// The sources go because they are borrows (see `registerSource`) and this
+	/// manager has no way to know whether the buffers behind them are still
+	/// alive. A process-wide manager cleared between compiles is the common
+	/// case, and there the previous compile's buffers are typically freed
+	/// right after it -- keeping the registrations would leave `clear` holding
+	/// dangling slices that the next `registerSource` reads while comparing
+	/// filenames. A caller that wants a registration to outlive a `clear`
+	/// re-registers it afterwards, which costs nothing and states the intent.
 	void clear() @trusted {
 		foreach (i; 0 .. daLength(diagnostics))
 			free(diagnostics[i]);
 		daClear(diagnostics);
+		daClear(sourceFiles);
 	}
 
 	/// Renders every pushed diagnostic into a single newly heap-allocated fp
@@ -451,6 +483,35 @@ private size_t byteColumnToDisplayColumn(const(char)[] line, size_t byteColumn) 
 		byteIdx += utf8EncodedLength(codepoints[i]);
 	}
 	return displayCol;
+}
+
+unittest {
+	// The first column never needs decoding, so it short-circuits.
+	assert(byteColumnToDisplayColumn("abc", 1) == 1);
+	// Pure ASCII: display columns are byte columns.
+	assert(byteColumnToDisplayColumn("abc", 3) == 3);
+
+	// One codepoint of each UTF-8 encoded length, each followed by an ASCII
+	// byte whose column is asked for -- so the walk has to know how many bytes
+	// the leading codepoint took. Narrow ones advance the display column by 1
+	// regardless of how wide their encoding is.
+	assert(byteColumnToDisplayColumn("éx", 3) == 2);  // 2-byte U+00E9
+	assert(byteColumnToDisplayColumn("€x", 4) == 2);  // 3-byte U+20AC
+	assert(byteColumnToDisplayColumn("\U0001F600x", 5) == 3); // 4-byte, and double-width
+
+	// Double-width codepoints take two display columns each.
+	assert(byteColumnToDisplayColumn("中x", 4) == 3);   // 3-byte U+4E2D
+	assert(byteColumnToDisplayColumn("中中x", 7) == 5);
+
+	// Zero-width codepoints take none: "e" + U+0301 combining acute.
+	assert(byteColumnToDisplayColumn("e\u0301x", 4) == 2);
+
+	// A byte column past the end of the line stops at the last codepoint
+	// rather than running off it.
+	assert(byteColumnToDisplayColumn("é", 3) == 2);
+
+	// Invalid UTF-8 has no decodable columns, so byte columns are used as-is.
+	assert(byteColumnToDisplayColumn("\xFF\xFEx", 3) == 3);
 }
 
 /// An annotation paired with its already-resolved display column (column 0
@@ -723,6 +784,9 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 // Tests
 // ---------------------------------------------------------------------------
 
+unittest {
+	enableAnsiColorsAndUTF8();
+}
 
 unittest {
 	assert(Ansi.nextColor() == Ansi.black);
@@ -789,6 +853,8 @@ unittest {
 	assert(!mgr.hasErrors());
 
 	assert(mgr.render() is null); // nothing pushed after clear()
+	assert(!mgr.deregisterSource("a.c")); // clear() dropped the sources too
+	assert(!mgr.deregisterSource("b.c"));
 
 	import core.stdc.stdio : tmpfile, fclose, ftell;
 
@@ -1025,3 +1091,68 @@ unittest {
 	assert(ftell(f) > 0);
 }
 
+
+unittest { // a registration is a borrow, and both ways of ending it work
+	// `registerSource` stores slices, not copies, so a registration that
+	// outlives the buffer behind it dangles. The read that trips over it is
+	// the *filename* comparison inside the next `registerSource` -- far from
+	// the free that caused it -- so the filenames here are heap buffers that
+	// get freed while the manager is still in use. Under -fsanitize=address a
+	// regression in either escape below shows up as a use-after-free here
+	// rather than as a mystery much later in the host program.
+	import core.stdc.stdlib : cmalloc = malloc, cfree = free;
+	import core.stdc.string : memcpy;
+
+	Manager mgr;
+	scope (exit) free(mgr);
+
+	enum aName = "a.c";
+	enum bName = "b.c";
+	char* a = cast(char*) cmalloc(aName.length);
+	char* b = cast(char*) cmalloc(bName.length);
+	assert(a !is null && b !is null);
+	memcpy(a, aName.ptr, aName.length);
+	memcpy(b, bName.ptr, bName.length);
+
+	mgr.registerSource(a[0 .. aName.length], "alpha\n");
+	mgr.registerSource(b[0 .. bName.length], "beta\n");
+
+	const(char)[] found;
+	assert(tryGetSource(mgr.sourceFiles, "a.c", found) && found == "alpha\n");
+
+	// One file's storage goes away: deregister, then free. Dropping one entry
+	// leaves the other reachable.
+	assert(mgr.deregisterSource(a[0 .. aName.length]));
+	cfree(a);
+	assert(!mgr.deregisterSource("a.c")); // already gone; no second removal
+	assert(!mgr.deregisterSource("never-registered.c"));
+	assert(!tryGetSource(mgr.sourceFiles, "a.c", found));
+	assert(tryGetSource(mgr.sourceFiles, "b.c", found) && found == "beta\n");
+
+	// Walks the surviving entries comparing filenames -- the read that would
+	// have hit `a`'s freed buffer had the deregistration not removed it.
+	mgr.registerSource("c.c", "gamma\n");
+
+	// A diagnostic against the deregistered file still renders; it just falls
+	// back to the unavailable-source note instead of quoting the line.
+	Diagnostic gone;
+	gone.kind = Kind.error;
+	gone.message = promoteLiteral("file is gone");
+	gone.location = Detailed("a.c", Pair(1, 1), Pair(1, 2));
+	mgr.push(gone);
+
+	char* rendered = mgr.render();
+	assert(rendered !is null);
+	strFree(rendered);
+
+	// `clear` ends every remaining borrow at once, so a manager reused across
+	// compiles never carries the previous compile's slices into the next one.
+	mgr.clear();
+	cfree(b);
+	assert(!mgr.deregisterSource("b.c"));
+	assert(!tryGetSource(mgr.sourceFiles, "b.c", found));
+
+	// Same walk again, now over an emptied list: nothing left to dangle.
+	mgr.registerSource("d.c", "delta\n");
+	assert(tryGetSource(mgr.sourceFiles, "d.c", found) && found == "delta\n");
+}
