@@ -3,7 +3,8 @@ module diagnose.diagnostics;
 import diagnose.source_location;
 
 import fp.dynarray : pushBack, deleteRange, daLength = length, daFree = free, daSlice = slice, daClear = clear;
-import fp.string : concatenate, concatenateSlice, concatenateMultipleSlices, promoteLiteral, format, strFree = free, strLength = length, contains, splitSlices, codepointsSlice;
+import fp.pointer : notFound;
+import fp.string : concatenate, concatenateSlice, concatenateMultiple, promoteLiteral, format, strFree = free, strLength = length, contains, splitSlices, codepointsSlice;
 
 import std.algorithm.sorting : stdSort = sort;
 import std.algorithm.comparison : min;
@@ -167,13 +168,18 @@ struct SourceFile {
 	const(char)[] source;
 }
 
-private bool tryGetSource(const SourceFile* files, const(char)[] filename, out const(char)[] source) @trusted {
+/// Index of `filename`'s registration in `files`, or `notFound`.
+private size_t indexOfFile(const SourceFile* files, const(char)[] filename) @trusted {
 	foreach (i; 0 .. daLength(files))
-		if (files[i].filename == filename) {
-			source = files[i].source;
-			return true;
-		}
-	return false;
+		if (files[i].filename == filename) return i;
+	return notFound;
+}
+
+private bool tryGetSource(const SourceFile* files, const(char)[] filename, out const(char)[] source) @trusted {
+	immutable i = indexOfFile(files, filename);
+	if (i == notFound) return false;
+	source = files[i].source;
+	return true;
 }
 
 struct Manager {
@@ -193,12 +199,9 @@ struct Manager {
 	/// `deregisterSource` when a single file's storage goes away, or with
 	/// `clear` when starting a fresh compile.
 	void registerSource(const(char)[] filename, const(char)[] source) @trusted {
-		foreach (i; 0 .. daLength(sourceFiles))
-			if (sourceFiles[i].filename == filename) {
-				sourceFiles[i].source = source;
-				return;
-			}
-		pushBack(sourceFiles, SourceFile(filename, source));
+		immutable i = indexOfFile(sourceFiles, filename);
+		if (i != notFound) sourceFiles[i].source = source;
+		else pushBack(sourceFiles, SourceFile(filename, source));
 	}
 
 	/// Drops the registration for `filename`, if there is one, and reports
@@ -208,12 +211,10 @@ struct Manager {
 	/// `registerSource` read freed memory. Diagnostics already pushed against
 	/// the file are kept -- they render with the "source unavailable" note.
 	bool deregisterSource(const(char)[] filename) @trusted {
-		foreach (i; 0 .. daLength(sourceFiles))
-			if (sourceFiles[i].filename == filename) {
-				deleteRange(sourceFiles, i, 1, false);
-				return true;
-			}
-		return false;
+		immutable i = indexOfFile(sourceFiles, filename);
+		if (i == notFound) return false;
+		deleteRange(sourceFiles, i, 1, false);
+		return true;
 	}
 
 	/// Takes ownership of `diag` -- don't use or free it again after this call.
@@ -253,60 +254,39 @@ struct Manager {
 	/// error/warning summary). The caller frees the result.
 	char* render() const @trusted {
 		static void printDiagnosticHeader(ref char* out_, const Diagnostic diag) @trusted {
-			static void appendKindPrefix(ref char* out_, Kind kind) @trusted {
-				final switch (kind) {
-					case Kind.info:
-						concatenateMultipleSlices(out_, Ansi.cyan, Ansi.bold, "Info");
-						break;
-					case Kind.note:
-						concatenateMultipleSlices(out_, Ansi.blue, Ansi.bold, "Note");
-						break;
-					case Kind.warning:
-						concatenateMultipleSlices(out_, Ansi.yellow, Ansi.bold, "Warning");
-						break;
-					case Kind.error:
-						concatenateMultipleSlices(out_, Ansi.red, Ansi.bold, "Error");
-						break;
-				}
-				concatenateSlice(out_, Ansi.reset);
-			}
-
 			if (diag.hasCode) {
-				concatenateMultipleSlices(out_, Ansi.bold, getKindColor(diag.kind), "[E");
+				concatenateMultiple(out_, Ansi.bold, getKindColor(diag.kind), "[E");
 				char* code = format("%03zu".ptr, diag.code);
 				scope(exit) strFree(code);
 				concatenate(out_, code);
 				concatenateSlice(out_, "] ");
 			}
 
-			appendKindPrefix(out_, diag.kind);
-			concatenateMultipleSlices(out_, ": ", Ansi.reset, Ansi.bold, diag.message.daSlice, Ansi.reset, "\n");
+			concatenateMultiple(out_, kindStyles[diag.kind].color, Ansi.bold,
+				kindStyles[diag.kind].name, Ansi.reset);
+			concatenateMultiple(out_, ": ", Ansi.reset, Ansi.bold, diag.message.daSlice, Ansi.reset, "\n");
 
-			concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold, "┌─");
+			concatenateMultiple(out_, " ", Ansi.cyan, Ansi.bold, "┌─");
 			char* loc = diag.location.toDisplayString();
 			scope(exit) strFree(loc);
 			concatenate(out_, loc);
-			concatenateMultipleSlices(out_, Ansi.reset, "\n");
+			concatenateMultiple(out_, Ansi.reset, "\n");
 		}
 
 		static void appendSummary(ref char* out_, size_t errorCount, size_t warningCount) @trusted {
 			if (errorCount == 0 && warningCount == 0) return;
 
+			static void appendCount(ref char* out_, size_t n, const(char)[] color,
+					const(char)[] singular, const(char)[] plural) @trusted {
+				concatenateMultiple(out_, color, Ansi.bold, n, n != 1 ? plural : singular, Ansi.reset);
+			}
+
 			concatenateSlice(out_, Ansi.bold);
-			if (errorCount > 0) {
-				concatenateSlice(out_, Ansi.red);
-				appendSize(out_, errorCount);
-				concatenateMultipleSlices(out_, errorCount != 1 ? " errors" : " error", Ansi.reset);
-			}
-			if (errorCount > 0 && warningCount > 0) {
-				concatenateMultipleSlices(out_, Ansi.bold, ", ", Ansi.reset);
-			}
-			if (warningCount > 0) {
-				concatenateMultipleSlices(out_, Ansi.yellow, Ansi.bold);
-				appendSize(out_, warningCount);
-				concatenateMultipleSlices(out_, warningCount != 1 ? " warnings" : " warning", Ansi.reset);
-			}
-			concatenateMultipleSlices(out_, Ansi.bold, " generated.", Ansi.reset, "\n");
+			if (errorCount > 0) appendCount(out_, errorCount, Ansi.red, " error", " errors");
+			if (errorCount > 0 && warningCount > 0)
+				concatenateMultiple(out_, Ansi.bold, ", ", Ansi.reset);
+			if (warningCount > 0) appendCount(out_, warningCount, Ansi.yellow, " warning", " warnings");
+			concatenateMultiple(out_, Ansi.bold, " generated.", Ansi.reset, "\n");
 		}
 
 		char* out_ = null;
@@ -321,7 +301,7 @@ struct Manager {
 				printSourceContext(out_, diag, source, sourceFiles);
 			else appendUnavailableSourceNote(out_);
 
-			concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold, "└─", Ansi.reset, "\n\n");
+			concatenateMultiple(out_, " ", Ansi.cyan, Ansi.bold, "└─", Ansi.reset, "\n\n");
 		}
 
 		if (n > 0) {
@@ -361,14 +341,17 @@ void free(ref Manager mgr) @trusted {
 // ---------------------------------------------------------------------------
 
 
-private const(char)[] getKindColor(Kind kind) @nogc nothrow {
-	final switch (kind) {
-		case Kind.info: return Ansi.cyan;
-		case Kind.note: return Ansi.blue;
-		case Kind.warning: return Ansi.yellow;
-		case Kind.error: return Ansi.red;
-	}
-}
+/// How each kind announces itself in a diagnostic header. Indexed by `Kind`,
+/// so the order has to match its declaration.
+private struct KindStyle { const(char)[] color; const(char)[] name; }
+private static immutable KindStyle[4] kindStyles = [
+	KindStyle(Ansi.cyan, "Info"),
+	KindStyle(Ansi.blue, "Note"),
+	KindStyle(Ansi.yellow, "Warning"),
+	KindStyle(Ansi.red, "Error"),
+];
+
+private const(char)[] getKindColor(Kind kind) { return kindStyles[kind].color; }
 
 private void appendSpaces(ref char* out_, size_t n) @trusted {
 	foreach (i; 0 .. n) concatenateSlice(out_, " ");
@@ -392,8 +375,23 @@ unittest {
 	assert(digitCount(1000) == 4);
 }
 
+/// Opens a row with the cyan left margin the whole block is drawn in: a
+/// space, `width` blanks where the line number would go, then `marker`.
+/// Leaves the style reset behind it, for the caller to write into.
+private void appendGutter(ref char* out_, size_t width, const(char)[] marker) @trusted {
+	concatenateMultiple(out_, " ", Ansi.cyan, Ansi.bold);
+	appendSpaces(out_, width);
+	concatenateMultiple(out_, marker, Ansi.reset);
+}
+
+/// A gutter row carrying nothing but the `·` continuation marker.
+private void appendContinuationRow(ref char* out_, size_t width) @trusted {
+	appendGutter(out_, width, " ·");
+	concatenateSlice(out_, "\n");
+}
+
 private void appendUnavailableSourceNote(ref char* out_) @trusted {
-	concatenateMultipleSlices(out_, " ", Ansi.yellow, Ansi.bold, "(source not available)", Ansi.reset, "\n");
+	concatenateMultiple(out_, " ", Ansi.yellow, Ansi.bold, "(source not available)", Ansi.reset, "\n");
 }
 
 /// Zero-width codepoints: combining marks, joiners, and variation selectors.
@@ -521,11 +519,11 @@ private struct AnnotatedColumn {
 	size_t column;
 }
 
-private bool descByColumn(in AnnotatedColumn a, in AnnotatedColumn b) @nogc nothrow {
+private bool descByColumn(in AnnotatedColumn a, in AnnotatedColumn b) {
 	return a.column > b.column;
 }
 
-private size_t effectiveColumn(size_t column, size_t lineLen) @nogc nothrow {
+private size_t effectiveColumn(size_t column, size_t lineLen) {
 	return column == 0 ? lineLen + 1 : column;
 }
 
@@ -567,7 +565,13 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 	static void appendPadded(ref char* out_, size_t value, size_t width) @trusted {
 		immutable digits = digitCount(value);
 		if (width > digits) appendSpaces(out_, width - digits);
-		appendSize(out_, value);
+		cast(void)concatenateMultiple(out_, value);
+	}
+
+	/// Adds `ann` to `result` with its column resolved against `lineStr`.
+	static void pushResolved(ref AnnotatedColumn* result, const(Diagnostic.Annotation)* ann, const(char)[] lineStr) @trusted {
+		immutable byteCol = effectiveColumn(ann.position.column, lineStr.length);
+		pushBack(result, AnnotatedColumn(ann, byteColumnToDisplayColumn(lineStr, byteCol)));
 	}
 
 	/// Collects the diagnostic's own-file annotations touching `lineNum`, sorted
@@ -577,26 +581,20 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 		AnnotatedColumn* result = null;
 		foreach (i; 0 .. daLength(annotations)) {
 			const ann = &annotations[i];
-			if ((ann.file.length == 0 || ann.file == diagFile) && ann.position.line == lineNum) {
-				immutable byteCol = effectiveColumn(ann.position.column, lineStr.length);
-				pushBack(result, AnnotatedColumn(ann, byteColumnToDisplayColumn(lineStr, byteCol)));
-			}
+			if ((ann.file.length == 0 || ann.file == diagFile) && ann.position.line == lineNum)
+				pushResolved(result, ann, lineStr);
 		}
 		stdSort!descByColumn(daSlice(result));
 		return result;
 	}
 
-	/// Same as `collectMainLineAnnotations`, but over an already file-filtered
-	/// group of annotation pointers (used for the "points into another file" case).
+	/// Ditto, over an already file-filtered group of annotation pointers (the
+	/// "points into another file" case).
 	static AnnotatedColumn* collectForeignLineAnnotations(const(Diagnostic.Annotation)** group, size_t lineNum, const(char)[] lineStr) @trusted {
 		AnnotatedColumn* result = null;
-		foreach (i; 0 .. daLength(group)) {
-			const ann = group[i];
-			if (ann.position.line == lineNum) {
-				immutable byteCol = effectiveColumn(ann.position.column, lineStr.length);
-				pushBack(result, AnnotatedColumn(ann, byteColumnToDisplayColumn(lineStr, byteCol)));
-			}
-		}
+		foreach (i; 0 .. daLength(group))
+			if (group[i].position.line == lineNum)
+				pushResolved(result, group[i], lineStr);
 		stdSort!descByColumn(daSlice(result));
 		return result;
 	}
@@ -607,15 +605,15 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 			const ann = sorted[i].annotation;
 			immutable actualColumn = sorted[i].column;
 
-			concatenateMultipleSlices(out_, "  ", Ansi.cyan, Ansi.bold);
-			appendSpaces(out_, lineNumWidth);
-			concatenateMultipleSlices(out_, "│", Ansi.reset, " ");
+			concatenateSlice(out_, " ");
+			appendGutter(out_, lineNumWidth, "│");
+			concatenateSlice(out_, " ");
 
 			foreach (col; 1 .. actualColumn) {
 				bool hasLater = false;
 				foreach (j; i + 1 .. n) {
 					if (sorted[j].column == col) {
-						concatenateMultipleSlices(out_, sorted[j].annotation.color, "│", Ansi.reset);
+						concatenateMultiple(out_, sorted[j].annotation.color, "│", Ansi.reset);
 						hasLater = true;
 						break;
 					}
@@ -623,7 +621,7 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 				if (!hasLater) concatenateSlice(out_, " ");
 			}
 
-			concatenateMultipleSlices(out_, ann.color, "└─ ", Ansi.reset, ann.message.daSlice, "\n");
+			concatenateMultiple(out_, ann.color, "└─ ", Ansi.reset, ann.message.daSlice, "\n");
 		}
 	}
 
@@ -688,9 +686,9 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 
 		const(char)[] lineStr = lines[lineNum - 1];
 
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
+		concatenateMultiple(out_, " ", Ansi.cyan, Ansi.bold);
 		appendPadded(out_, lineNum, lineNumWidth);
-		concatenateMultipleSlices(out_, " │ ", Ansi.reset, kindColor, "➤ ", Ansi.reset);
+		concatenateMultiple(out_, " │ ", Ansi.reset, kindColor, "➤ ", Ansi.reset);
 
 		immutable startCol = (lineNum == startLine) ? effectiveColumn(diag.location.start.column, lineStr.length) : 1;
 		immutable endCol = (lineNum == endLine) ? effectiveColumn(diag.location.end.column, lineStr.length) : lineStr.length + 1;
@@ -701,7 +699,7 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 		immutable highlightStart = startCol - 1;
 		immutable highlightLen = min(endCol - startCol, lineStr.length - highlightStart);
 		if (highlightLen > 0)
-			concatenateMultipleSlices(out_, kindColor, Ansi.bold, lineStr[highlightStart .. highlightStart + highlightLen], Ansi.reset);
+			concatenateMultiple(out_, kindColor, Ansi.bold, lineStr[highlightStart .. highlightStart + highlightLen], Ansi.reset);
 
 		if (endCol - 1 < lineStr.length)
 			concatenateSlice(out_, lineStr[endCol - 1 .. $]);
@@ -719,11 +717,9 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 	scope(exit) freeForeignGroups(groups);
 
 	foreach (g; 0 .. daLength(groups)) {
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
-		appendSpaces(out_, lineNumWidth);
-		concatenateMultipleSlices(out_, " ·", Ansi.reset, "\n");
+		appendContinuationRow(out_, lineNumWidth);
 
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold, "┌─ <\"", groups[g].file, "\">", Ansi.reset, "\n");
+		concatenateMultiple(out_, " ", Ansi.cyan, Ansi.bold, "┌─ <\"", groups[g].file, "\">", Ansi.reset, "\n");
 
 		const(char)[] foreignSource;
 		if (!tryGetSource(sourceFiles, groups[g].file, foreignSource)) {
@@ -745,9 +741,9 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 			if (lineNum > daLength(foreignLines)) continue;
 			const(char)[] lineStr = foreignLines[lineNum - 1];
 
-			concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
+			concatenateMultiple(out_, " ", Ansi.cyan, Ansi.bold);
 			appendPadded(out_, lineNum, lineNumWidth);
-			concatenateMultipleSlices(out_, " │ ", Ansi.reset, kindColor, "➤ ", Ansi.reset, lineStr, "\n");
+			concatenateMultiple(out_, " │ ", Ansi.reset, kindColor, "➤ ", Ansi.reset, lineStr, "\n");
 
 			AnnotatedColumn* lineAnnotations = collectForeignLineAnnotations(groups[g].annotations, lineNum, lineStr);
 			scope(exit) daFree(lineAnnotations);
@@ -757,25 +753,19 @@ private void printSourceContext(ref char* out_, const Diagnostic diag, const(cha
 
 	// Print continuation dots.
 	foreach (_; 0 .. 2) {
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
-		appendSpaces(out_, lineNumWidth);
-		concatenateMultipleSlices(out_, " ·", Ansi.reset, "\n");
+		appendContinuationRow(out_, lineNumWidth);
 	}
 
 	if (diag.contextMessage !is null && strLength(diag.contextMessage) > 0) {
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
-		appendSpaces(out_, lineNumWidth);
-		concatenateMultipleSlices(out_, " └─", Ansi.reset, " ", diag.contextMessage.daSlice, "\n");
+		appendGutter(out_, lineNumWidth, " └─");
+		concatenateMultiple(out_, " ", diag.contextMessage.daSlice, "\n");
 	}
 
 	if (diag.additionalNote !is null && strLength(diag.additionalNote) > 0) {
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
-		appendSpaces(out_, lineNumWidth);
-		concatenateMultipleSlices(out_, " ·", Ansi.reset, "\n");
+		appendContinuationRow(out_, lineNumWidth);
 
-		concatenateMultipleSlices(out_, " ", Ansi.cyan, Ansi.bold);
-		appendSpaces(out_, lineNumWidth);
-		concatenateMultipleSlices(out_, " ", Ansi.reset, Ansi.blue, Ansi.bold, "Note:", Ansi.reset, " ", diag.additionalNote.daSlice, "\n");
+		appendGutter(out_, lineNumWidth, " ");
+		concatenateMultiple(out_, Ansi.blue, Ansi.bold, "Note:", Ansi.reset, " ", diag.additionalNote.daSlice, "\n");
 	}
 }
 
