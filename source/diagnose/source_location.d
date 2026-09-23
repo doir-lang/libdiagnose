@@ -1,6 +1,6 @@
 module diagnose.source_location;
 
-import fp.string : concatenateSlice, concatenate, format, free, equal;
+import fp.string : concatenateMultiple, concatenateSlice, free, equal;
 
 @nogc nothrow:
 
@@ -50,21 +50,11 @@ struct Detailed {
 	/// the caller must free it.
 	char* toDisplayString() const @trusted {
 		char* out_ = null;
-		concatenateSlice(out_, " <\"");
-		concatenateSlice(out_, file);
-		concatenateSlice(out_, "\":");
-		appendSize(out_, start.line);
-		if (start.line != end.line) {
-			concatenateSlice(out_, "-");
-			appendSize(out_, end.line);
-		}
-		concatenateSlice(out_, ":");
-		appendSize(out_, start.column);
-		if (start.column != end.column) {
-			concatenateSlice(out_, "-");
-			appendSize(out_, end.column);
-		}
-		concatenateSlice(out_, ">");
+		cast(void)concatenateMultiple(out_, " <\"", file, "\":", start.line);
+		if (start.line != end.line) cast(void)concatenateMultiple(out_, "-", end.line);
+		cast(void)concatenateMultiple(out_, ":", start.column);
+		if (start.column != end.column) cast(void)concatenateMultiple(out_, "-", end.column);
+		cast(void)concatenateSlice(out_, ">");
 		return out_;
 	}
 }
@@ -108,13 +98,6 @@ struct SourceLocation {
 	Detailed toDetailed(const(char)[] source) const {
 		return Detailed(file, start(source), end(source));
 	}
-}
-
-/// Appends the decimal representation of `value` to the fp string `buf`.
-package void appendSize(ref char* buf, size_t value) @trusted {
-	char* rendered = format("%zu".ptr, value);
-	scope(exit) free(rendered);
-	concatenate(buf, rendered);
 }
 
 unittest {
