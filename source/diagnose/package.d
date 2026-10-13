@@ -1,5 +1,4 @@
-/// `import diagnose;` pulls in the whole library; `import diagnose.diagnostics;`
-/// etc. still works for module-qualified access only.
+/// `import diagnose;` imports the whole library; import `diagnose.diagnostics` or `diagnose.source_location` for one part.
 module diagnose;
 
 public import diagnose.diagnostics;

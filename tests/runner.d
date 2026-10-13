@@ -1,10 +1,4 @@
-/**
-* `-betterC` has no built-in unittest runner, so this walks every module's
-* tests with `__traits(getUnitTests)` and calls them.
-*
-* Progress goes to `stderr`, which is unbuffered, so a test that hangs or
-* aborts still leaves a record of how far the run got.
-*/
+/// Runs every module's unittests, since `-betterC` has no runner of its own. Progress goes to the unbuffered `stderr`, so a test that hangs or aborts still shows how far the run got.
 module runner;
 
 import core.stdc.stdio : fprintf, printf, stderr;
@@ -33,18 +27,9 @@ private int runEveryTest() {
 	return 0;
 }
 
-/**
-* `tools/coverage.sh` builds this as ordinary D rather than `-betterC`,
-* because `-cov` registers its counters through druntime. That build needs
-* druntime's own `main` so the registration actually runs.
-*/
+// `tools/coverage.py` builds plain D, since `-cov` registers its counters through druntime, which needs druntime's own `main`.
 version(DiagnoseCoverage) {
-	/*
-	* druntime would otherwise run every `unittest` itself on the way to
-	* `main`, and `runEveryTest` then runs the same tests a second time.
-	* Replacing the tester with one that runs nothing (but still asks for
-	* `main`) leaves this build doing exactly what the `-betterC` one does.
-	*/
+	// Stops druntime running every test itself before `main`, which would run them twice.
 	shared static this() {
 		import core.runtime : Runtime, UnitTestResult;
 		Runtime.extendedModuleUnitTester = () => UnitTestResult(0, 0, true, false);
