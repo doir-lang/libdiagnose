@@ -825,6 +825,16 @@ version(unittest) {
 		assert(push(mgr, diag) !is null);
 	}
 
+	version(WASI) private extern(C) FILE* fmemopen(void* buffer, size_t size, const(char)* mode);
+
+	// A writable file to print into; WASI has no `tmpfile`, so there it writes to memory instead.
+	private FILE* scratchFile() {
+		version(WASI) {
+			static char[4096] buffer;
+			return fmemopen(buffer.ptr, buffer.length, "w");
+		} else return core.stdc.stdio.tmpfile();
+	}
+
 	// Whether rendering `mgr` gives text containing `needle`.
 	private bool renders(const ref Manager mgr, const(char)[] needle) {
 		char* rendered = render(mgr);
@@ -901,7 +911,7 @@ unittest {
 	assert(!deregisterSource(mgr, "a.c"));
 	assert(!deregisterSource(mgr, "b.c"));
 
-	auto file = core.stdc.stdio.tmpfile();
+	auto file = scratchFile();
 	assert(file !is null);
 	scope(exit) cast(void) core.stdc.stdio.fclose(file);
 	assert(printAll(mgr, file));
@@ -1104,7 +1114,7 @@ unittest {
 		scope(exit) fp.string.free(expected);
 		assert(expected !is null);
 
-		auto file = core.stdc.stdio.tmpfile();
+		auto file = scratchFile();
 		assert(file !is null);
 		scope(exit) cast(void) core.stdc.stdio.fclose(file);
 		for (size_t n = 0;; ++n) {
