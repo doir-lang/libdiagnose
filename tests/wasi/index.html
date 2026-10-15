@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>libdiagnose (wasm32-wasi)</title>
+	<style>
+		body { font-family: system-ui, sans-serif; margin: 2em; }
+		pre { background: #f4f4f4; padding: 1em; }
+		.stderr { color: #555; }
+		.passed { color: #070; }
+		.failed { color: #b00; }
+		#example .stderr:not([class*=" fg"]) { color: inherit; }
+		.bold { font-weight: bold; }
+		.dim { opacity: 0.6; }
+		.underline { text-decoration: underline; }
+		.fg30 { color: #000; } .fg31 { color: #cd3131; } .fg32 { color: #00bc00; } .fg33 { color: #949800; }
+		.fg34 { color: #0451a5; } .fg35 { color: #bc05bc; } .fg36 { color: #0598bc; } .fg37 { color: #555; }
+		.fg90 { color: #666; } .fg91 { color: #cd3131; } .fg92 { color: #14ce14; } .fg93 { color: #b5ba00; }
+		.fg94 { color: #0451a5; } .fg95 { color: #bc05bc; } .fg96 { color: #0598bc; } .fg97 { color: #a5a5a5; }
+		.bg40 { background: #3b3b3b; } .bg41 { background: #cd3131; } .bg42 { background: #0dbc79; } .bg43 { background: #e5e510; }
+		.bg44 { background: #2472c8; } .bg45 { background: #bc3fbc; } .bg46 { background: #11a8cd; } .bg47 { background: #e5e5e5; }
+		.bg100 { background: #666; } .bg101 { background: #f14c4c; } .bg102 { background: #23d18b; } .bg103 { background: #f5f543; }
+		.bg104 { background: #3b8eea; } .bg105 { background: #d670d6; } .bg106 { background: #29b8db; } .bg107 { background: #fff; }
+	</style>
+</head>
+<body>
+	<h1>libdiagnose <small>wasm32-wasi</small></h1>
+	<h2>Tests</h2>
+	<p id="testStatus">Running…</p>
+	<pre id="tests"></pre>
+	<h2>Example</h2>
+	<p id="exampleStatus">Waiting for the tests…</p>
+	<pre id="example"></pre>
+	<script type="module">
+		import { exampleSucceeded, runProgram } from "./run.mjs";
+
+		const report = (status, ok, text) => {
+			status.textContent = text;
+			status.className = ok ? "passed" : "failed";
+		};
+
+		// Appends lines to `output` as spans styled by their ANSI escapes; the style carries across lines, as in a terminal.
+		const terminal = (output) => {
+			const style = { fg: null, bg: null, bold: false, dim: false, underline: false };
+			const apply = (codes) => {
+				for (const code of codes.split(";").map((c) => Number(c || 0))) {
+					if (code === 0) Object.assign(style, { fg: null, bg: null, bold: false, dim: false, underline: false });
+					else if (code === 1) style.bold = true;
+					else if (code === 2) style.dim = true;
+					else if (code === 4) style.underline = true;
+					else if (code === 22) style.bold = style.dim = false;
+					else if (code === 24) style.underline = false;
+					else if (code === 39) style.fg = null;
+					else if (code === 49) style.bg = null;
+					else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) style.fg = code;
+					else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) style.bg = code;
+				}
+			};
+			return (cls) => (line) => {
+				const parts = (line + "\n").split(/\x1b\[([\d;]*)m/);
+				for (let i = 0; i < parts.length; ++i) {
+					if (i % 2) { apply(parts[i]); continue; }
+					if (!parts[i]) continue;
+					const span = document.createElement("span");
+					span.className = [cls, style.fg && `fg${style.fg}`, style.bg && `bg${style.bg}`,
+						style.bold && "bold", style.dim && "dim", style.underline && "underline"].filter(Boolean).join(" ");
+					span.textContent = parts[i];
+					output.append(span);
+				}
+			};
+		};
+
+		const run = async (file, name, output, status, succeeded, passed, failed) => {
+			try {
+				const module = await WebAssembly.compileStreaming(fetch(file));
+				const write = terminal(output);
+				const code = await runProgram(module, name, write("stdout"), write("stderr"));
+				report(status, succeeded(code), succeeded(code) ? passed : `${failed} (exit status ${code})`);
+				return succeeded(code);
+			} catch (e) {
+				report(status, false, `Could not run: ${e}`);
+				return false;
+			}
+		};
+
+		const testStatus = document.getElementById("testStatus");
+		const exampleStatus = document.getElementById("exampleStatus");
+		if (await run("diagnose-tests.wasm", "diagnose-tests", document.getElementById("tests"), testStatus, (code) => code === 0, "Passed", "Failed")) {
+			exampleStatus.textContent = "Running…";
+			await run("diagnose-example.wasm", "diagnose-example", document.getElementById("example"), exampleStatus, exampleSucceeded, "Rendered", "Could not render");
+		} else report(exampleStatus, false, "Skipped, since the tests failed");
+	</script>
+</body>
+</html>
