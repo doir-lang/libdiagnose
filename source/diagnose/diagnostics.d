@@ -140,7 +140,7 @@ struct Diagnostic {
 	bool hasCode = false; /// Whether the header shows `code`, as `[E001]`.
 	size_t code = 0; /// The code the header shows when `hasCode` is set.
 	char* message; /// An owned fp string, the headline.
-	Detailed location; /// The range it highlights; a column of 0 means the end of the line.
+	Detailed location; /// The range it highlights; a column of 0 means the end of the line. An empty `file` means it has no location, such as a file that cannot be read, and renders without source.
 	Annotation* annotations; /// An owned fp dynarray.
 	char* contextMessage; /// An owned fp string summarizing what the location is, such as "The values are outputs of this match expression", or null.
 	char* additionalNote; /// An owned fp string giving a closing note, such as "Outputs of match expressions must coerce to the same type", or null.
@@ -720,6 +720,7 @@ private void appendHeader(ref Output output, ref const Diagnostic diag) @trusted
 	}
 	put(output, style.color, Ansi.bold, style.name, Ansi.reset);
 	put(output, ": ", Ansi.reset, Ansi.bold, fp.string.slice(diag.message), Ansi.reset, "\n");
+	if (diag.location.file.length == 0) return;
 
 	char* location = diagnose.source_location.toDisplayString(diag.location);
 	scope(exit) fp.string.free(location);
@@ -747,7 +748,7 @@ private void appendSummary(ref Output output, const ref Manager mgr) @trusted {
 }
 
 
-/// Renders every diagnostic pushed to `mgr` into a new fp string: each one's header, the source lines it points at with its annotations, then a count of errors and warnings. The caller frees it with `fp.string.free`.
+/// Renders every diagnostic pushed to `mgr` into a new fp string: each one's header, the source lines it points at with its annotations, then a count of errors and warnings. A diagnostic with no location shows only its header and closing note. The caller frees it with `fp.string.free`.
 ///
 /// Returns null if nothing was pushed, or if an allocation was refused.
 ///
@@ -770,6 +771,11 @@ char* render(const ref Manager mgr) @trusted {
 	foreach (i; 0 .. fp.dynarray.length(mgr.diagnostics)) {
 		const diag = &mgr.diagnostics[i];
 		appendHeader(output, *diag);
+		if (diag.location.file.length == 0) {
+			if (fp.string.length(diag.additionalNote) > 0) put(output, " ", Ansi.blue, Ansi.bold, "Note:", Ansi.reset, " ", fp.string.slice(diag.additionalNote), "\n");
+			put(output, "\n");
+			continue;
+		}
 		const(char)[] source;
 		if (tryGetSource(mgr.sourceFiles, diag.location.file, source))
 			appendSourceContext(output, *diag, source, mgr.sourceFiles);
@@ -1015,6 +1021,19 @@ unittest {
 		assert(renders(mgr, "2 errors"));
 		assert(!renders(mgr, "warning"));
 		assert(renders(mgr, "(source not available)"));
+	}
+	{
+		// No location: only the headline and closing note, with no source box.
+		Manager mgr;
+		scope(exit) free(mgr);
+		Diagnostic diag = makeDiagnostic(Kind.error, "cannot read missing.c", Detailed.init);
+		diag.additionalNote = fp.string.makeDynamic("check the path");
+		assert(diag.additionalNote !is null);
+		pushTo(mgr, diag);
+		static immutable string[4] needles = ["cannot read missing.c", "Note:", "check the path", "1 error"];
+		foreach (needle; needles)
+			assert(renders(mgr, needle));
+		assert(!renders(mgr, "┌─") && !renders(mgr, "└─") && !renders(mgr, "(source not available)"));
 	}
 	{
 		// Plural warnings with no errors.
