@@ -33,7 +33,7 @@ python3 tools/wasi.py --node     # build and run the same tests and example head
 ```
 
 The script builds both the `unittest` and `example` configurations with LDC for `wasm32-wasi`, linking against [wasi-sdk](https://github.com/WebAssembly/wasi-sdk)'s libc, which it downloads into `bin/wasi-sdk` on first use (or set `WASI_SYSROOT` and `WASI_BUILTINS`).
-They run through [@tybys/wasm-util](https://github.com/toyobayashi/wasm-util)'s WASI and [@emnapi/wasi-threads](https://github.com/toyobayashi/emnapi/tree/main/packages/wasi-threads), the same host libfp and bc-threads use; the script installs both into `bin/wasi`, where the page and [tests/wasi/node.mjs](tests/wasi/node.mjs) import them alike.
+They run through [@bjorn3/browser_wasi_shim](https://github.com/bjorn3/browser_wasi_shim)'s WASI and [@emnapi/wasi-threads](https://github.com/toyobayashi/emnapi/tree/main/packages/wasi-threads), the same host libfp and bc-threads use; the script installs both into `bin/wasi`, where the page and [tests/wasi/node.mjs](tests/wasi/node.mjs) import them alike.
 [tests/wasi/run.mjs](tests/wasi/run.mjs) runs each program on a worker, which reports its output and exit status over a `BroadcastChannel`.
 Output arrives a line at a time; the page turns the example's ANSI escapes into styled text, while Node passes them straight to the terminal.
 The example runs only once the tests pass, and counts as succeeding when it exits 0 or 1 (it reports errors, so 1 is expected); a failed assertion aborts, which in wasm is a trap, reported as exit status 134.

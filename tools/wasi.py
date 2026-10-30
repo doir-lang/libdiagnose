@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the unittests and the example for wasm32-wasi and runs them in a browser, or headlessly under Node, through @tybys/wasm-util's WASI and @emnapi/wasi-threads.
+"""Builds the unittests and the example for wasm32-wasi and runs them in a browser, or headlessly under Node, through @bjorn3/browser_wasi_shim's WASI and @emnapi/wasi-threads.
 
 It asks `dub describe` for each configuration's sources and import paths, compiling libfp in alongside. The build links against a wasi-sdk sysroot and compiler-rt builtins, downloaded once into bin/wasi-sdk unless WASI_SYSROOT and WASI_BUILTINS name local copies. It links with `wasm-ld` from PATH (or WASM_LD), falling back to LDC's internal linker.
 
@@ -21,7 +21,7 @@ example = os.path.join(out, 'diagnose-example.wasm')
 sdkVersion = '34'
 release = f'https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-{sdkVersion}/'
 target = 'wasm32-wasip1'
-packages = ['@tybys/wasm-util@0.10.4', '@emnapi/wasi-threads@2.2.0']
+packages = ['@bjorn3/browser_wasi_shim@0.4.2', '@emnapi/wasi-threads@2.2.0']
 
 
 def fetch(name):
