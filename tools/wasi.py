@@ -18,8 +18,8 @@ compiler = os.environ.get('DC', 'ldc2')
 tests = os.path.join(out, 'diagnose-tests.wasm')
 example = os.path.join(out, 'diagnose-example.wasm')
 
-sdkVersion = '34'
-release = f'https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-{sdkVersion}/'
+sdk_version = '34'
+release = f'https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-{sdk_version}/'
 target = 'wasm32-wasip1'
 packages = ['@bjorn3/browser_wasi_shim@0.4.2', '@emnapi/wasi-threads@2.2.0']
 
@@ -39,6 +39,7 @@ def fetch(name):
 
 
 def describe(config, *args):
+	"""Runs `dub describe` for configuration `config` with `args` and returns its non-empty output lines; exits with dub's output if it fails."""
 	result = subprocess.run(['dub', 'describe', *args, '-c', config, '--compiler=' + compiler],
 		cwd=root, capture_output=True, text=True)
 	if result.returncode != 0:
@@ -48,32 +49,33 @@ def describe(config, *args):
 
 def link(config, wasm, flags):
 	"""Compiles dub configuration `config` with the extra compiler `flags` and links it into `wasm`."""
-	sysroot = os.environ.get('WASI_SYSROOT') or fetch(f'wasi-sysroot-{sdkVersion}.0')
+	sysroot = os.environ.get('WASI_SYSROOT') or fetch(f'wasi-sysroot-{sdk_version}.0')
 	builtins = os.environ.get('WASI_BUILTINS') or os.path.join(
-		fetch(f'libclang_rt-{sdkVersion}.0'), 'wasm32-unknown-wasip1', 'libclang_rt.builtins.a')
+		fetch(f'libclang_rt-{sdk_version}.0'), 'wasm32-unknown-wasip1', 'libclang_rt.builtins.a')
 	libs = os.path.join(sysroot, 'lib', target)
 
-	importPaths = describe(config, '--import-paths')
+	import_paths = describe(config, '--import-paths')
 	sources = describe(config, '--data=source-files', '--data-list')
 	# dub lists only libdiagnose's own modules; libfp must be compiled in too, or it would not link.
-	for path in importPaths:
+	for path in import_paths:
 		if os.path.commonpath([root, os.path.abspath(path)]) != root:
 			sources += sorted(glob.glob(os.path.join(path, '**', '*.d'), recursive=True))
 	compile = [compiler, '-mtriple=wasm32-unknown-wasi', '-betterC', '-checkaction=C', *flags,
-		*('-I' + p for p in importPaths), '-od=' + out, *sources]
+		*('-I' + p for p in import_paths), '-od=' + out, *sources]
 	# The long-double archive replaces libc's printf, so it must come first; D's `real` is a 128-bit long double here.
-	linkArgs = [os.path.join(libs, 'crt1-command.o'), '-L' + libs, '-lc-printscan-long-double', '-lc', builtins]
+	link_arguments = [os.path.join(libs, 'crt1-command.o'), '-L' + libs, '-lc-printscan-long-double', '-lc', builtins]
 
 	linker = os.environ.get('WASM_LD') or shutil.which('wasm-ld')
 	if linker:
 		obj = os.path.splitext(wasm)[0] + '.o'
 		subprocess.run([*compile, '-c', '-of=' + obj], cwd=root, check=True)
-		subprocess.run([linker, '-o', wasm, *linkArgs, obj], cwd=root, check=True)
+		subprocess.run([linker, '-o', wasm, *link_arguments, obj], cwd=root, check=True)
 	else:
-		subprocess.run([*compile, '--link-internally', '-of=' + wasm, *('-L' + a for a in linkArgs)], cwd=root, check=True)
+		subprocess.run([*compile, '--link-internally', '-of=' + wasm, *('-L' + a for a in link_arguments)], cwd=root, check=True)
 
 
 def build():
+	"""Builds the wasm test binary into bin/wasi and copies the page scripts beside it."""
 	os.makedirs(out, exist_ok=True)
 	# Debug, like `dub test`.
 	link('unittest', tests, ['-unittest', '-d-debug'])
@@ -94,12 +96,14 @@ def install():
 class IsolatedHandler(http.server.SimpleHTTPRequestHandler):
 	"""Serves with the headers that make a page cross-origin isolated, without which a browser offers no shared memory."""
 	def end_headers(self):
+		"""Adds the cross-origin isolation headers, then ends the header block."""
 		self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
 		self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
 		super().end_headers()
 
 
 def serve(port):
+	"""Serves bin/wasi on `port` until interrupted."""
 	handler = functools.partial(IsolatedHandler, directory=out)
 	with http.server.ThreadingHTTPServer(('localhost', port), handler) as server:
 		print(f'open http://localhost:{port}/ to run the tests (Ctrl+C stops the server)', file=sys.stderr)
@@ -109,11 +113,13 @@ def serve(port):
 			pass
 
 
-def runNode():
+def run_node():
+	"""Runs the page script under Node and returns the tests' exit status."""
 	return subprocess.run(['node', os.path.join(out, 'node.mjs'), tests, example]).returncode
 
 
 def main():
+	"""Parses the command line, builds, then serves or runs the tests as asked."""
 	parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 	mode = parser.add_mutually_exclusive_group()
 	mode.add_argument('--serve', nargs='?', const=8000, type=int, metavar='PORT', help='serve the test page for a browser')
@@ -124,7 +130,7 @@ def main():
 	if args.serve:
 		serve(args.serve)
 	elif args.node:
-		sys.exit(runNode())
+		sys.exit(run_node())
 
 
 if __name__ == '__main__':

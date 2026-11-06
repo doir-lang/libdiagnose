@@ -1,14 +1,16 @@
 import diagnose;
-import fp.string : makeDynamic, createFromConcatenation;
+static import fp.dynarray;
+static import fp.file;
+static import fp.string;
 
-import core.stdc.stdio : fputs, stdout;
+static import core.stdc.stdio;
 
 extern (C) int main() {
-	cast(void) enableAnsiColorsAndUTF8();
+	cast(void) fp.file.enableAnsiColorsAndUTF8();
 	Manager manager;
 	scope (exit) free(manager);
 
-	// Example: Multi-line block with missing return
+	// Example 1: Multi-line block with missing return
 	const(char)[] complexExample =
 `my_function : (x : i32, y : i32) -> i32 = {
 	%1 : i32 = add(x, y)
@@ -24,35 +26,35 @@ caller : () = {
 	_ : _ = return()
 }`;
 
-	if (!manager.registerSource("complex.doir", complexExample)) return 2;
+	if (!manager.addSource("complex.doir", complexExample)) return 2;
 
 	// Error 1: Missing return in function
-	Diagnostic diag1;
-	diag1.kind = Kind.error;
-	diag1.hasCode = true;
-	diag1.code = 601;
-	diag1.message = makeDynamic("Function body must end with a terminator");
-	diag1.location.file = "complex.doir";
-	diag1.location.start = Pair(1, 43); // Start of block
-	diag1.location.end = Pair(6, 0); // End of block
+	Diagnostic missingReturn;
+	missingReturn.kind = Kind.error;
+	missingReturn.hasCode = true;
+	missingReturn.code = 601;
+	missingReturn.message = fp.string.clone("Function body must end with a terminator").get;
+	missingReturn.location.file = "complex.doir";
+	missingReturn.location.start = LineColumn(1, 43); // Start of block
+	missingReturn.location.end = LineColumn(6, 0); // End of block
 
-	Diagnostic.Annotation termAnn;
-	termAnn.position = Pair(6, 0); // End of line 6
-	termAnn.message = createFromConcatenation("Expected ", Ansi.blue, "return", Ansi.reset, " or ", Ansi.blue, "halt", Ansi.reset, " here");
-	if (!diag1.pushAnnotation(termAnn)) return 2;
+	Diagnostic.Annotation terminator;
+	terminator.position = LineColumn(6, 0); // End of line 6
+	terminator.message = fp.string.joined("Expected ", Ansi.blue, "return", Ansi.reset, " or ", Ansi.blue, "halt", Ansi.reset, " here").get;
+	if (!fp.dynarray.pushBack(missingReturn.annotations, terminator)) return 2;
 
-	Diagnostic.Annotation retTypeAnn;
-	retTypeAnn.position = Pair(1, 37); // The return type
-	retTypeAnn.message = createFromConcatenation("Function declared to return ", Ansi.magenta, "i32", Ansi.reset);
-	retTypeAnn.color = Ansi.cyan; // Cyan for info
-	if (!diag1.pushAnnotation(retTypeAnn)) return 2;
+	Diagnostic.Annotation returnType;
+	returnType.position = LineColumn(1, 37); // The return type
+	returnType.message = fp.string.joined("Function declared to return ", Ansi.magenta, "i32", Ansi.reset).get;
+	returnType.color = Ansi.cyan;
+	if (!fp.dynarray.pushBack(missingReturn.annotations, returnType)) return 2;
 
-	diag1.contextMessage = createFromConcatenation("This function block requires a ", Ansi.blue, "return", Ansi.reset, " statement");
-	diag1.additionalNote = createFromConcatenation(
+	missingReturn.contextMessage = fp.string.joined("This function block requires a ", Ansi.blue, "return", Ansi.reset, " statement").get;
+	missingReturn.note = fp.string.joined(
 		"Add ", Ansi.blue, "_ : _ = return(%3)", Ansi.reset, " to return the computed value"
-	);
+	).get;
 
-	if (manager.push(diag1) is null) return 2;
+	if (manager.push(missingReturn) is null) return 2;
 
 	// Example 2: Namespace resolution error
 	const(char)[] namespaceExample =
@@ -69,38 +71,38 @@ physics : namespace = {
 %3 : vec2 = vec2(%1, %2)
 `;
 
-	if (!manager.registerSource("namespaces.doir", namespaceExample)) return 2;
+	if (!manager.addSource("namespaces.doir", namespaceExample)) return 2;
 
-	Diagnostic diag2;
-	diag2.kind = Kind.error;
-	diag2.hasCode = true;
-	diag2.code = 602;
-	diag2.message = makeDynamic("Ambiguous type reference");
-	diag2.location.file = "namespaces.doir";
-	diag2.location.start = Pair(11, 6);
-	diag2.location.end = Pair(11, 10);
+	Diagnostic ambiguousType;
+	ambiguousType.kind = Kind.error;
+	ambiguousType.hasCode = true;
+	ambiguousType.code = 602;
+	ambiguousType.message = fp.string.clone("Ambiguous type reference").get;
+	ambiguousType.location.file = "namespaces.doir";
+	ambiguousType.location.start = LineColumn(11, 6);
+	ambiguousType.location.end = LineColumn(11, 10);
 
-	Diagnostic.Annotation mathDef;
-	mathDef.position = Pair(2, 5);
-	mathDef.message = createFromConcatenation("Could refer to ", Ansi.brightMagenta, Ansi.bold, "math.vec2", Ansi.reset, " defined here");
-	mathDef.color = Ansi.cyan;
-	if (!diag2.pushAnnotation(mathDef)) return 2;
+	Diagnostic.Annotation mathDefinition;
+	mathDefinition.position = LineColumn(2, 5);
+	mathDefinition.message = fp.string.joined("Could refer to ", Ansi.brightMagenta, Ansi.bold, "math.vec2", Ansi.reset, " defined here").get;
+	mathDefinition.color = Ansi.cyan;
+	if (!fp.dynarray.pushBack(ambiguousType.annotations, mathDefinition)) return 2;
 
-	Diagnostic.Annotation physicsDef;
-	physicsDef.position = Pair(6, 5);
-	physicsDef.message = createFromConcatenation(
+	Diagnostic.Annotation physicsDefinition;
+	physicsDefinition.position = LineColumn(6, 5);
+	physicsDefinition.message = fp.string.joined(
 		"Could refer to ", Ansi.brightMagenta, Ansi.bold, "physics.vec2", Ansi.reset, " defined here"
-	);
-	physicsDef.color = Ansi.cyan;
-	if (!diag2.pushAnnotation(physicsDef)) return 2;
+	).get;
+	physicsDefinition.color = Ansi.cyan;
+	if (!fp.dynarray.pushBack(ambiguousType.annotations, physicsDefinition)) return 2;
 
-	diag2.contextMessage = createFromConcatenation("Multiple definitions of ", Ansi.brightBlue, "vec2", Ansi.reset, " are visible in this scope");
-	diag2.additionalNote = createFromConcatenation(
+	ambiguousType.contextMessage = fp.string.joined("Multiple definitions of ", Ansi.brightBlue, "vec2", Ansi.reset, " are visible in this scope").get;
+	ambiguousType.note = fp.string.joined(
 		"Use a fully qualified name like ", Ansi.brightBlue, "math.vec2", Ansi.reset,
 		" or ", Ansi.brightBlue, "physics.vec2", Ansi.reset
-	);
+	).get;
 
-	if (manager.push(diag2) is null) return 2;
+	if (manager.push(ambiguousType) is null) return 2;
 
 	// Example 3: Comptime constraint violation
 	const(char)[] comptimeExample =
@@ -114,34 +116,34 @@ runtime_value : i32 = 5
 result : i32 = comp_pow(runtime_value, 2)
 `;
 
-	if (!manager.registerSource("comptime.doir", comptimeExample)) return 2;
+	if (!manager.addSource("comptime.doir", comptimeExample)) return 2;
 
-	Diagnostic diag3;
-	diag3.kind = Kind.error;
-	diag3.hasCode = true;
-	diag3.code = 603;
-	diag3.message = makeDynamic("Comptime parameter requires compile-time constant");
-	diag3.location.file = "comptime.doir";
-	diag3.location.start = Pair(8, 25);
-	diag3.location.end = Pair(8, 38);
+	Diagnostic comptimeViolation;
+	comptimeViolation.kind = Kind.error;
+	comptimeViolation.hasCode = true;
+	comptimeViolation.code = 603;
+	comptimeViolation.message = fp.string.clone("Comptime parameter requires compile-time constant").get;
+	comptimeViolation.location.file = "comptime.doir";
+	comptimeViolation.location.start = LineColumn(8, 25);
+	comptimeViolation.location.end = LineColumn(8, 38);
 
-	Diagnostic.Annotation runtimeAnn;
-	runtimeAnn.position = Pair(8, 25);
-	runtimeAnn.message = createFromConcatenation("This value is computed at ", Ansi.brightMagenta, Ansi.bold, "runtime", Ansi.reset);
-	if (!diag3.pushAnnotation(runtimeAnn)) return 2;
+	Diagnostic.Annotation runtimeValue;
+	runtimeValue.position = LineColumn(8, 25);
+	runtimeValue.message = fp.string.joined("This value is computed at ", Ansi.brightMagenta, Ansi.bold, "runtime", Ansi.reset).get;
+	if (!fp.dynarray.pushBack(comptimeViolation.annotations, runtimeValue)) return 2;
 
-	Diagnostic.Annotation paramAnn;
-	paramAnn.position = Pair(1, 13);
-	paramAnn.message = createFromConcatenation("Parameter requires ", Ansi.brightMagenta, Ansi.bold, "compile-time", Ansi.reset, " value");
-	paramAnn.color = Ansi.cyan;
-	if (!diag3.pushAnnotation(paramAnn)) return 2;
+	Diagnostic.Annotation comptimeParameter;
+	comptimeParameter.position = LineColumn(1, 13);
+	comptimeParameter.message = fp.string.joined("Parameter requires ", Ansi.brightMagenta, Ansi.bold, "compile-time", Ansi.reset, " value").get;
+	comptimeParameter.color = Ansi.cyan;
+	if (!fp.dynarray.pushBack(comptimeViolation.annotations, comptimeParameter)) return 2;
 
-	diag3.contextMessage = createFromConcatenation(
+	comptimeViolation.contextMessage = fp.string.joined(
 		"The ", Ansi.brightBlue, "mantissa", Ansi.reset, " parameter is marked as ", Ansi.brightBlue, "comptime", Ansi.reset
-	);
-	diag3.additionalNote = makeDynamic("Only compile-time constants can be passed to comptime parameters");
+	).get;
+	comptimeViolation.note = fp.string.clone("Only compile-time constants can be passed to comptime parameters").get;
 
-	if (manager.push(diag3) is null) return 2;
+	if (manager.push(comptimeViolation) is null) return 2;
 
 	// Example 4: Note about optimization opportunity
 	const(char)[] optimizationExample =
@@ -157,36 +159,36 @@ loop_body : block = {
 result : type.pointer(i32) = while(%4, loop_body)
 `;
 
-	if (!manager.registerSource("optimization.doir", optimizationExample)) return 2;
+	if (!manager.addSource("optimization.doir", optimizationExample)) return 2;
 
-	Diagnostic diag4;
-	diag4.kind = Kind.note;
-	diag4.message = makeDynamic("Loop condition uses constant values");
-	diag4.location.file = "optimization.doir";
-	diag4.location.start = Pair(9, 11);
-	diag4.location.end = Pair(9, 26);
+	Diagnostic constantLoop;
+	constantLoop.kind = Kind.note;
+	constantLoop.message = fp.string.clone("Loop condition uses constant values").get;
+	constantLoop.location.file = "optimization.doir";
+	constantLoop.location.start = LineColumn(9, 11);
+	constantLoop.location.end = LineColumn(9, 26);
 
-	Diagnostic.Annotation const1;
-	const1.position = Pair(9, 19);
-	const1.message = createFromConcatenation("This is constant: ", Ansi.brightMagenta, Ansi.bold, "0", Ansi.reset);
-	const1.color = Ansi.blue; // Blue for note
-	if (!diag4.pushAnnotation(const1)) return 2;
+	Diagnostic.Annotation constantZero;
+	constantZero.position = LineColumn(9, 19);
+	constantZero.message = fp.string.joined("This is constant: ", Ansi.brightMagenta, Ansi.bold, "0", Ansi.reset).get;
+	constantZero.color = Ansi.blue;
+	if (!fp.dynarray.pushBack(constantLoop.annotations, constantZero)) return 2;
 
-	Diagnostic.Annotation const2;
-	const2.position = Pair(9, 23);
-	const2.message = createFromConcatenation("This is constant: ", Ansi.brightMagenta, Ansi.bold, "100", Ansi.reset);
-	const2.color = Ansi.blue;
-	if (!diag4.pushAnnotation(const2)) return 2;
+	Diagnostic.Annotation constantHundred;
+	constantHundred.position = LineColumn(9, 23);
+	constantHundred.message = fp.string.joined("This is constant: ", Ansi.brightMagenta, Ansi.bold, "100", Ansi.reset).get;
+	constantHundred.color = Ansi.blue;
+	if (!fp.dynarray.pushBack(constantLoop.annotations, constantHundred)) return 2;
 
-	Diagnostic.Annotation const3;
-	const3.position = Pair(9, 11);
-	const3.message = createFromConcatenation("This is function: ", Ansi.blue, Ansi.bold, "is_less", Ansi.reset);
-	const3.color = Ansi.blue;
-	if (!diag4.pushAnnotation(const3)) return 2;
+	Diagnostic.Annotation predicateFunction;
+	predicateFunction.position = LineColumn(9, 11);
+	predicateFunction.message = fp.string.joined("This is function: ", Ansi.blue, Ansi.bold, "is_less", Ansi.reset).get;
+	predicateFunction.color = Ansi.blue;
+	if (!fp.dynarray.pushBack(constantLoop.annotations, predicateFunction)) return 2;
 
-	diag4.additionalNote = makeDynamic("Consider computing this at compile-time or using variables that change");
+	constantLoop.note = fp.string.clone("Consider computing this at compile-time or using variables that change").get;
 
-	if (manager.push(diag4) is null) return 2;
+	if (manager.push(constantLoop) is null) return 2;
 
 	// Example 5: Cross-file type mismatch (annotation points into a different file)
 	const(char)[] shapesExample =
@@ -199,7 +201,7 @@ area : (shape : circle) -> f32 = {
 }
 `;
 
-	if (!manager.registerSource("shapes.doir", shapesExample)) return 2;
+	if (!manager.addSource("shapes.doir", shapesExample)) return 2;
 
 	const(char)[] mainExample =
 `import : _ = shapes
@@ -210,36 +212,36 @@ my_square : square = { side = 2.0 }
 result : f32 = shapes.area(my_square)
 `;
 
-	if (!manager.registerSource("main.doir", mainExample)) return 2;
+	if (!manager.addSource("main.doir", mainExample)) return 2;
 
-	Diagnostic diag5;
-	diag5.kind = Kind.error;
-	diag5.hasCode = true;
-	diag5.code = 604;
-	diag5.message = makeDynamic("Argument type does not match parameter type");
-	diag5.location.file = "main.doir";
-	diag5.location.start = Pair(6, 28);
-	diag5.location.end = Pair(6, 37);
+	Diagnostic argumentType;
+	argumentType.kind = Kind.error;
+	argumentType.hasCode = true;
+	argumentType.code = 604;
+	argumentType.message = fp.string.clone("Argument type does not match parameter type").get;
+	argumentType.location.file = "main.doir";
+	argumentType.location.start = LineColumn(6, 28);
+	argumentType.location.end = LineColumn(6, 37);
 
-	Diagnostic.Annotation argAnn;
-	argAnn.position = Pair(6, 28); // "my_square" argument in main.doir
-	argAnn.message = createFromConcatenation("Argument has type ", Ansi.brightMagenta, Ansi.bold, "square", Ansi.reset);
-	if (!diag5.pushAnnotation(argAnn)) return 2;
+	Diagnostic.Annotation argument;
+	argument.position = LineColumn(6, 28); // "my_square" argument in main.doir
+	argument.message = fp.string.joined("Argument has type ", Ansi.brightMagenta, Ansi.bold, "square", Ansi.reset).get;
+	if (!fp.dynarray.pushBack(argumentType.annotations, argument)) return 2;
 
-	Diagnostic.Annotation paramAnn2;
-	paramAnn2.position = Pair(3, 17);
-	paramAnn2.file = "shapes.doir"; // Points into a different file than the diagnostic itself
-	paramAnn2.message = createFromConcatenation(
+	Diagnostic.Annotation parameter;
+	parameter.position = LineColumn(3, 17);
+	parameter.file = "shapes.doir"; // Points into a different file than the diagnostic itself
+	parameter.message = fp.string.joined(
 		"Parameter ", Ansi.brightBlue, "shape", Ansi.reset, " declared to require ",
 		Ansi.brightMagenta, Ansi.bold, "circle", Ansi.reset, " here"
-	);
-	paramAnn2.color = Ansi.cyan;
-	if (!diag5.pushAnnotation(paramAnn2)) return 2;
+	).get;
+	parameter.color = Ansi.cyan;
+	if (!fp.dynarray.pushBack(argumentType.annotations, parameter)) return 2;
 
-	diag5.contextMessage = createFromConcatenation("Call to ", Ansi.brightBlue, "shapes.area", Ansi.reset, " defined in another file");
-	diag5.additionalNote = createFromConcatenation("Pass a value of type ", Ansi.blue, "circle", Ansi.reset, " instead");
+	argumentType.contextMessage = fp.string.joined("Call to ", Ansi.brightBlue, "shapes.area", Ansi.reset, " defined in another file").get;
+	argumentType.note = fp.string.joined("Pass a value of type ", Ansi.blue, "circle", Ansi.reset, " instead").get;
 
-	if (manager.push(diag5) is null) return 2;
+	if (manager.push(argumentType) is null) return 2;
 
 	// Example 6: Unicode text. Columns are byte offsets, so spans must not split a multi-byte sequence.
 	const(char)[] unicodeExample =
@@ -250,42 +252,41 @@ result : f32 = shapes.area(my_square)
 		"\n" ~
 		"result : i32 = café(\"\U0001F600\")\n";
 
-	if (!manager.registerSource("unicode.doir", unicodeExample)) return 2;
+	if (!manager.addSource("unicode.doir", unicodeExample)) return 2;
 
-	Diagnostic diag6;
-	diag6.kind = Kind.error;
-	diag6.hasCode = true;
-	diag6.code = 605;
-	diag6.message = makeDynamic("String literal cannot be converted to i32");
-	diag6.location.file = "unicode.doir";
-	diag6.location.start = Pair(6, 22); // Start of the "😀" string literal (including quotes)
-	diag6.location.end = Pair(6, 28); // End of the string literal
+	Diagnostic unicodeArgument;
+	unicodeArgument.kind = Kind.error;
+	unicodeArgument.hasCode = true;
+	unicodeArgument.code = 605;
+	unicodeArgument.message = fp.string.clone("String literal cannot be converted to i32").get;
+	unicodeArgument.location.file = "unicode.doir";
+	unicodeArgument.location.start = LineColumn(6, 22); // Start of the "😀" string literal (including quotes)
+	unicodeArgument.location.end = LineColumn(6, 28); // End of the string literal
 
-	Diagnostic.Annotation emojiAnn;
-	emojiAnn.position = Pair(6, 22);
-	emojiAnn.message = createFromConcatenation(
+	Diagnostic.Annotation emojiArgument;
+	emojiArgument.position = LineColumn(6, 22);
+	emojiArgument.message = fp.string.joined(
 		"Expected a numeric ", Ansi.blue, "i32", Ansi.reset, " value here, found ",
 		Ansi.brightMagenta, Ansi.bold, "\"\U0001F600\"", Ansi.reset
-	);
-	if (!diag6.pushAnnotation(emojiAnn)) return 2;
+	).get;
+	if (!fp.dynarray.pushBack(unicodeArgument.annotations, emojiArgument)) return 2;
 
-	Diagnostic.Annotation paramAnn3;
-	paramAnn3.position = Pair(1, 19); // The "i32" parameter type
-	paramAnn3.message = createFromConcatenation(
+	Diagnostic.Annotation unicodeParameter;
+	unicodeParameter.position = LineColumn(1, 19); // The "i32" parameter type
+	unicodeParameter.message = fp.string.joined(
 		"Parameter ", Ansi.brightBlue, "naïve", Ansi.reset, " declared as ", Ansi.brightMagenta, Ansi.bold, "i32", Ansi.reset, " here"
-	);
-	paramAnn3.color = Ansi.cyan;
-	if (!diag6.pushAnnotation(paramAnn3)) return 2;
+	).get;
+	unicodeParameter.color = Ansi.cyan;
+	if (!fp.dynarray.pushBack(unicodeArgument.annotations, unicodeParameter)) return 2;
 
-	diag6.contextMessage = createFromConcatenation("Call to ", Ansi.brightBlue, "café", Ansi.reset, " with a non-numeric argument");
-	diag6.additionalNote = makeDynamic(
+	unicodeArgument.contextMessage = fp.string.joined("Call to ", Ansi.brightBlue, "café", Ansi.reset, " with a non-numeric argument").get;
+	unicodeArgument.note = fp.string.clone(
 		"Emoji and other Unicode text can't be implicitly converted to i32 — pass a numeric literal instead"
-	);
+	).get;
 
-	if (manager.push(diag6) is null) return 2;
+	if (manager.push(unicodeArgument) is null) return 2;
 
-	// Print all diagnostics
-	cast(void) fputs("\n=== Complex DOIR Diagnostics ===\n\n".ptr, stdout);
+	cast(void) core.stdc.stdio.fputs("\n=== Complex DOIR Diagnostics ===\n\n".ptr, core.stdc.stdio.stdout);
 	if (!manager.printAll()) return 2;
 
 	return manager.hasErrors() ? 1 : 0;

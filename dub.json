@@ -8,7 +8,7 @@
     "dependencies": {
         "libfp": {
             "repository": "git+https://github.com/doir-lang/libfp.git",
-            "version": "2f23ff5fc170cc5be1e6d60e6ede5c0bf998e6dc"
+            "version": "735c83d753e7690652294b2bd71e8608f459029c"
         }
     },
     "dflags-ldc": ["-betterC", "-checkaction=C"],
