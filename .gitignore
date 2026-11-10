@@ -8,3 +8,6 @@ dub.selections.json
 diagnose-example*
 diagnose-test*
 bin
+__pycache__/
+*.pyc
+

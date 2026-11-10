@@ -5,13 +5,13 @@ public import diagnose.source_location : LineColumn, LineColumnRange;
 static import diagnose.source_location;
 
 static import fp.dynarray;
+static import fp.io;
 static import fp.lifecycle;
 static import fp.pointer;
 static import fp.algorithms;
 static import fp.string;
 static import fp.string.utf;
 
-import core.stdc.stdio : FILE, fwrite, stderr;
 static import std.algorithm.comparison;
 static import std.algorithm.sorting;
 
@@ -749,9 +749,9 @@ char* render(const ref Manager manager) @trusted {
 	return output.text;
 }
 
-/// Renders every diagnostic pushed to `manager`, as `render` does, and writes the UTF-8 result to `file`.
+/// Renders every diagnostic pushed to `manager`, as `render` does, and writes the UTF-8 result to the open descriptor `descriptor`, standard error by default, through `fp.io.writeAll`.
 ///
-/// Returns false, having written nothing, if an allocation was refused, or if the write fell short.
+/// Returns false, having written nothing, if an allocation was refused, or if the write failed, perhaps after part of the text was written.
 ///
 /// Examples:
 /// ---
@@ -759,19 +759,15 @@ char* render(const ref Manager manager) @trusted {
 /// scope(exit) free(manager);
 /// assert(printAll(manager));
 /// ---
-bool printAll(const ref Manager manager, FILE* file = stderr) @trusted {
+bool printAll(const ref Manager manager, int descriptor = fp.io.Console.error) {
 	char* rendered = render(manager);
 	scope(exit) fp.string.free(rendered);
 	if (rendered is null) return fp.dynarray.length(manager.diagnostics) == 0;
-	immutable length = fp.string.length(rendered);
-	return fwrite(rendered, 1, length, file) == length;
+	return fp.io.writeAll(descriptor, fp.string.slice(rendered));
 }
 
 
 version(unittest) {
-	static import core.stdc.stdio;
-	static import core.stdc.stdlib;
-	static import core.stdc.string;
 	static import fp.testing;
 
 	private Diagnostic makeDiagnostic(Kind kind, const(char)[] message, LineColumnRange location) {
@@ -795,15 +791,21 @@ version(unittest) {
 		assert(push(manager, diagnostic) !is null);
 	}
 
-	version(WASI) private extern(C) FILE* fmemopen(void* buffer, size_t size, const(char)* mode);
-
-	// A writable file to print into; WASI has no `tmpfile`, so there it writes to memory instead.
-	private FILE* scratchFile() {
-		version(WASI) {
-			static char[4096] buffer;
-			return fmemopen(buffer.ptr, buffer.length, "w");
-		} else return core.stdc.stdio.tmpfile();
+	// A temporary file to print into, through `descriptor`; `fp.testing.free` closes and removes it.
+	private fp.testing.ScratchFile openScratch() {
+		auto scratch = fp.testing.openScratchFile();
+		assert(!scratch.isNull);
+		return scratch.get;
 	}
+
+	// How many bytes have been printed into `scratch`.
+	private size_t printedLength(ref const fp.testing.ScratchFile scratch) {
+		auto read = fp.io.readFile(fp.string.slice(scratch.path));
+		assert(!read.isNull);
+		scope(exit) fp.string.free(read.get);
+		return fp.string.length(read.get);
+	}
+
 
 	// Whether rendering `manager` gives text containing `needle`.
 	private bool renders(const ref Manager manager, const(char)[] needle) {
@@ -895,11 +897,9 @@ unittest {
 	assert(!removeSource(manager, "a.c"));
 	assert(!removeSource(manager, "b.c"));
 
-	auto file = scratchFile();
-	assert(file !is null);
-	scope(exit) cast(void) core.stdc.stdio.fclose(file);
-	assert(printAll(manager, file));
-	assert(core.stdc.stdio.ftell(file) == 0);
+	auto scratch = openScratch();
+	scope(exit) fp.testing.free(scratch);
+	assert(printAll(manager, scratch.descriptor) && printedLength(scratch) == 0);
 }
 
 unittest { // a registration is a borrow, and both ways of ending it work
@@ -909,11 +909,11 @@ unittest { // a registration is a borrow, and both ways of ending it work
 
 	enum aName = "a.c";
 	enum bName = "b.c";
-	char* a = cast(char*) core.stdc.stdlib.malloc(aName.length);
-	char* b = cast(char*) core.stdc.stdlib.malloc(bName.length);
+	char* a = fp.pointer.allocate!char(aName.length);
+	char* b = fp.pointer.allocate!char(bName.length);
 	assert(a !is null && b !is null);
-	cast(void) core.stdc.string.memcpy(a, aName.ptr, aName.length);
-	cast(void) core.stdc.string.memcpy(b, bName.ptr, bName.length);
+	fp.pointer.copy(a[0 .. aName.length], aName);
+	fp.pointer.copy(b[0 .. bName.length], bName);
 
 	assert(addSource(manager, a[0 .. aName.length], "alpha\n"));
 	assert(addSource(manager, b[0 .. bName.length], "beta\n"));
@@ -922,7 +922,7 @@ unittest { // a registration is a borrow, and both ways of ending it work
 	assert(!hasLine(*fileNamed(manager.sourceFiles, "a.c"), 3));
 
 	assert(removeSource(manager, a[0 .. aName.length]));
-	core.stdc.stdlib.free(a);
+	fp.pointer.free(a);
 	assert(!removeSource(manager, "a.c"));
 	assert(!removeSource(manager, "never-registered.c"));
 	assert(fileNamed(manager.sourceFiles, "a.c") is null);
@@ -935,7 +935,7 @@ unittest { // a registration is a borrow, and both ways of ending it work
 	assert(renders(manager, "(source not available)"));
 
 	clear(manager);
-	core.stdc.stdlib.free(b);
+	fp.pointer.free(b);
 	assert(!removeSource(manager, "b.c"));
 	assert(fileNamed(manager.sourceFiles, "b.c") is null);
 	assert(addSource(manager, "d.c", "delta\n"));
@@ -1114,9 +1114,8 @@ unittest {
 		scope(exit) fp.string.free(expected);
 		assert(expected !is null);
 
-		auto file = scratchFile();
-		assert(file !is null);
-		scope(exit) cast(void) core.stdc.stdio.fclose(file);
+		auto scratch = openScratch();
+		scope(exit) fp.testing.free(scratch);
 		for (size_t n = 0;; ++n) {
 			auto previous = fp.testing.limitAllocations(n);
 			char* rendered = render(manager);
@@ -1127,11 +1126,12 @@ unittest {
 				break;
 			}
 			previous = fp.testing.limitAllocations(n);
-			assert(!printAll(manager, file));
+			assert(!printAll(manager, scratch.descriptor));
 			fp.testing.restoreAllocator(previous);
-			assert(core.stdc.stdio.ftell(file) == 0);
+			assert(printedLength(scratch) == 0);
 		}
-		assert(printAll(manager, file));
-		assert(core.stdc.stdio.ftell(file) == fp.string.length(expected));
+		assert(!printAll(manager, -1)); // a write that fails
+		assert(printAll(manager, scratch.descriptor));
+		assert(printedLength(scratch) == fp.string.length(expected));
 	}
 }

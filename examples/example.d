@@ -1,12 +1,11 @@
 import diagnose;
 static import fp.dynarray;
-static import fp.file;
+static import fp.io;
 static import fp.string;
 
-static import core.stdc.stdio;
 
 extern (C) int main() {
-	cast(void) fp.file.enableAnsiColorsAndUTF8();
+	cast(void) fp.io.enableAnsiColorsAndUTF8();
 	Manager manager;
 	scope (exit) free(manager);
 
@@ -286,7 +285,7 @@ result : f32 = shapes.area(my_square)
 
 	if (manager.push(unicodeArgument) is null) return 2;
 
-	cast(void) core.stdc.stdio.fputs("\n=== Complex DOIR Diagnostics ===\n\n".ptr, core.stdc.stdio.stdout);
+	if (!fp.io.print("\n=== Complex DOIR Diagnostics ===\n\n")) return 2;
 	if (!manager.printAll()) return 2;
 
 	return manager.hasErrors() ? 1 : 0;
