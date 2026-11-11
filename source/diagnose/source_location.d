@@ -33,7 +33,8 @@ struct LineColumnRange {
 }
 
 
-/// The byte offset `pair` refers to in `source`, which may be one past the end. `pair` must lie within `source`.
+/// The byte offset `pair` refers to in `source`, which may be one past the end.
+/// `pair` must lie within `source`.
 ///
 /// Examples:
 /// ---
@@ -41,6 +42,7 @@ struct LineColumnRange {
 /// assert(byteOffset(LineColumn(2, 4), "abc\ndef") == 7);
 /// ---
 size_t byteOffset(LineColumn pair, const(char)[] source) {
+	assert(pair.line >= 1 && pair.column >= 1, "diagnose.source_location: lines and columns count from 1");
 	immutable lineStart = pair.line <= 1 ? 0 : fp.string.lineStart(source, pair.line - 1);
 	assert(lineStart != fp.pointer.notFound && lineStart + pair.column - 1 <= source.length, "diagnose.source_location: pair out of range for source");
 	return lineStart + pair.column - 1;
@@ -55,10 +57,15 @@ size_t byteOffset(LineColumn pair, const(char)[] source) {
 LineColumn lineColumn(const(char)[] source, size_t at) {
 	assert(at <= source.length, "diagnose.source_location: byte out of range for source");
 	immutable line = fp.string.lineOf(source, at);
-	return LineColumn(LineColumn.init.line + line, at - fp.string.lineStart(source, line) + 1);
+	immutable start = fp.string.lineStart(source, line);
+	assert(start != fp.pointer.notFound && start <= at, "diagnose.source_location: the line holding a byte starts after it");
+	immutable pair = LineColumn(LineColumn.init.line + line, at - start + 1);
+	assert(byteOffset(pair, source) == at, "diagnose.source_location: a pair that does not lead back to its byte");
+	return pair;
 }
 
-/// The line and column byte offset `at` of `text` lies at, which must be at most its length. A rope keeps its line starts, so this costs O(log n) rather than a scan.
+/// The line and column byte offset `at` of `text` lies at, which must be at most its length.
+/// A rope keeps its line starts, so this costs O(log n) rather than a scan.
 ///
 /// Examples:
 /// ---
@@ -68,8 +75,11 @@ LineColumn lineColumn(const(char)[] source, size_t at) {
 /// assert(lineColumn(text, 5) == LineColumn(2, 2));
 /// ---
 LineColumn lineColumn(const fp.rope.Rope text, size_t at) {
+	assert(at <= fp.rope.length(text), "diagnose.source_location: byte out of range for text");
 	immutable line = fp.rope.lineOf(text, at);
-	return LineColumn(line + 1, at - fp.rope.lineStart(text, line) + 1);
+	immutable start = fp.rope.lineStart(text, line);
+	assert(start != fp.pointer.notFound && start <= at, "diagnose.source_location: the line holding a byte starts after it");
+	return LineColumn(line + 1, at - start + 1);
 }
 
 
@@ -84,6 +94,7 @@ LineColumn lineColumn(const fp.rope.Rope text, size_t at) {
 ByteRange fromSubstring(const(char)[] source, const(char)[] substring, const(char)[] file = "<unknown>") @trusted {
 	assert(substring.ptr >= source.ptr && substring.ptr + substring.length <= source.ptr + source.length, "diagnose.source_location: substring is not a slice of source");
 	immutable start = cast(size_t)(substring.ptr - source.ptr);
+	assert(start + substring.length <= source.length, "diagnose.source_location: a range past its source");
 	return ByteRange(file, start, start + substring.length);
 }
 
@@ -95,7 +106,10 @@ ByteRange fromSubstring(const(char)[] source, const(char)[] substring, const(cha
 /// assert(resolve(ByteRange("a.c", 4, 6), "abc\ndef") == LineColumnRange("a.c", LineColumn(2, 1), LineColumn(2, 3)));
 /// ---
 LineColumnRange resolve(ByteRange location, const(char)[] source) {
-	return LineColumnRange(location.file, lineColumn(source, location.startByte), lineColumn(source, location.endByte));
+	assert(location.startByte <= location.endByte, "diagnose.source_location: a range that ends before it starts");
+	auto range = LineColumnRange(location.file, lineColumn(source, location.startByte), lineColumn(source, location.endByte));
+	assert(range.start.line <= range.end.line, "diagnose.source_location: a resolved range that ends on an earlier line");
+	return range;
 }
 
 /// `location` resolved to lines and columns against `text`, the rope it was cut from, in O(log n).
@@ -108,7 +122,10 @@ LineColumnRange resolve(ByteRange location, const(char)[] source) {
 /// assert(resolve(ByteRange("a.c", 4, 6), text) == LineColumnRange("a.c", LineColumn(2, 1), LineColumn(2, 3)));
 /// ---
 LineColumnRange resolve(ByteRange location, const fp.rope.Rope text) {
-	return LineColumnRange(location.file, lineColumn(text, location.startByte), lineColumn(text, location.endByte));
+	assert(location.startByte <= location.endByte, "diagnose.source_location: a range that ends before it starts");
+	auto range = LineColumnRange(location.file, lineColumn(text, location.startByte), lineColumn(text, location.endByte));
+	assert(range.start.line <= range.end.line, "diagnose.source_location: a resolved range that ends on an earlier line");
+	return range;
 }
 
 /// `location` resolved to byte offsets against `source`, which its lines and columns must lie within.
@@ -118,11 +135,14 @@ LineColumnRange resolve(ByteRange location, const fp.rope.Rope text) {
 /// assert(byteRange(LineColumnRange("a.c", LineColumn(2, 1), LineColumn(2, 3)), "abc\ndef") == ByteRange("a.c", 4, 6));
 /// ---
 ByteRange byteRange(LineColumnRange location, const(char)[] source) {
-	return ByteRange(location.file, byteOffset(location.start, source), byteOffset(location.end, source));
+	auto range = ByteRange(location.file, byteOffset(location.start, source), byteOffset(location.end, source));
+	assert(range.endByte <= source.length, "diagnose.source_location: a range past its source");
+	return range;
 }
 
 
-/// `location` as a new fp string `<"file":line:column>`, giving a range for the line or column where start and end differ; `parseDisplay` reads it back. The caller frees it with `fp.string.free`.
+/// `location` as a new fp string `<"file":line:column>`, giving a range for the line or column where start and end differ; `parseDisplay` reads it back.
+/// The caller frees it with `fp.string.free`.
 ///
 /// Returns null if an allocation was refused.
 ///
@@ -140,31 +160,44 @@ char* display(LineColumnRange location) {
 	if (ok && location.start.column != location.end.column) ok = fp.string.append(out_, "-", location.end.column);
 	if (ok) ok = fp.string.append(out_, ">");
 	if (!ok) fp.string.free(out_);
+	assert(out_ is null || (fp.string.startsWith(out_, "<\"") && fp.string.endsWith(out_, ">")), "diagnose.source_location.display: a display parseDisplay cannot read");
+	assert(out_ is null || location.file.length > 0 || fp.string.startsWith(out_, "<\"\":"), "diagnose.source_location.display: lost the file name");
 	return out_;
 }
 
-// Reads a run of decimal digits at `text[at]` into `value`, advancing `at`. False if there is none or it overflows.
-private bool readNumber(const(char)[] text, ref size_t at, out size_t value) {
+// Reads a run of decimal digits at `text[at]`, advancing `at`.
+// Null if there is none or it overflows.
+private std.typecons.Nullable!size_t readNumber(const(char)[] text, ref size_t at) {
 	immutable start = at;
 	while (at < text.length && fp.string.ascii.isDigit(text[at])) ++at;
 	auto parsed = fp.string.numbers.parseUnsigned(text[start .. at]);
-	if (parsed.isNull || parsed.get.value > size_t.max) return false;
-	value = cast(size_t) parsed.get.value;
-	return true;
+	if (parsed.isNull || parsed.get.value > size_t.max) return typeof(return).init;
+	assert(at > start && at <= text.length, "diagnose.source_location: a number read from no digits");
+	return typeof(return)(cast(size_t) parsed.get.value);
+}
+
+private struct Span {
+	size_t first;
+	size_t last;
 }
 
 // Reads `number` or `number-number` at `text[at]`, the second defaulting to the first.
-private bool readSpan(const(char)[] text, ref size_t at, out size_t first, out size_t last) {
-	if (!readNumber(text, at, first)) return false;
-	last = first;
+private std.typecons.Nullable!Span readSpan(const(char)[] text, ref size_t at) {
+	auto number = readNumber(text, at);
+	if (number.isNull) return typeof(return).init;
+	size_t last = number.get;
 	if (at < text.length && text[at] == '-') {
 		++at;
-		return readNumber(text, at, last);
+		auto second = readNumber(text, at);
+		if (second.isNull) return typeof(return).init;
+		last = second.get;
 	}
-	return true;
+	assert(at <= text.length, "diagnose.source_location: read past the text");
+	return typeof(return)(Span(number.get, last));
 }
 
-/// Reads `text`, a location as `display` writes it, back into a range whose `file` is a slice of `text`: `<"file":line:column>`, the line and column each a number or a `first-last` range. Returns null if `text` is not entirely such a location, or a number overflows.
+/// Reads `text`, a location as `display` writes it, back into a range whose `file` is a slice of `text`: `<"file":line:column>`, the line and column each a number or a `first-last` range.
+/// Returns null if `text` is not entirely such a location, or a number overflows.
 ///
 /// Examples:
 /// ---
@@ -179,10 +212,17 @@ std.typecons.Nullable!LineColumnRange parseDisplay(const(char)[] text) {
 	LineColumnRange out_;
 	out_.file = text[2 .. close];
 	size_t at = close + 2;
-	if (!readSpan(text, at, out_.start.line, out_.end.line)) return typeof(return).init;
+	auto lines = readSpan(text, at);
+	if (lines.isNull) return typeof(return).init;
+	out_.start.line = lines.get.first;
+	out_.end.line = lines.get.last;
 	if (at >= text.length || text[at++] != ':') return typeof(return).init;
-	if (!readSpan(text, at, out_.start.column, out_.end.column)) return typeof(return).init;
+	auto columns = readSpan(text, at);
+	if (columns.isNull) return typeof(return).init;
+	out_.start.column = columns.get.first;
+	out_.end.column = columns.get.last;
 	if (at + 1 != text.length || text[at] != '>') return typeof(return).init;
+	assert(out_.file.ptr is text.ptr + 2 && out_.file.length == close - 2, "diagnose.source_location.parseDisplay: a file name outside its quotes");
 	return typeof(return)(out_);
 }
 

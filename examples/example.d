@@ -242,7 +242,8 @@ result : f32 = shapes.area(my_square)
 
 	if (manager.push(argumentType) is null) return 2;
 
-	// Example 6: Unicode text. Columns are byte offsets, so spans must not split a multi-byte sequence.
+	// Example 6: Unicode text.
+	// Columns are byte offsets, so spans must not split a multi-byte sequence.
 	const(char)[] unicodeExample =
 		"café : (naïve : i32) -> i32 = {\n" ~
 		"\t%1 : i32 = add(naïve, 1)\n" ~

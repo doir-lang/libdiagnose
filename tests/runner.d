@@ -1,4 +1,5 @@
-/// Runs every module's unittests, since `-betterC` has no runner of its own. Progress goes to the unbuffered `stderr`, so a test that hangs or aborts still shows how far the run got.
+/// Runs every module's unittests, since `-betterC` has no runner of its own.
+/// Progress goes to the unbuffered `stderr`, so a test that hangs or aborts still shows how far the run got.
 module runner;
 
 private alias modules = imported!"std.meta".AliasSeq!(

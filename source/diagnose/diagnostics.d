@@ -10,6 +10,7 @@ static import fp.lifecycle;
 static import fp.pointer;
 static import fp.algorithms;
 static import fp.string;
+static import fp.string.numbers;
 static import fp.string.utf;
 
 static import std.algorithm.comparison;
@@ -62,7 +63,8 @@ struct Ansi {
 	enum string bgBrightWhite = "\033[107m";
 }
 
-/// The next of the 16 foreground colors in `Ansi`, from `black` to `brightWhite` and back. Each thread cycles separately.
+/// The next of the 16 foreground colors in `Ansi`, from `black` to `brightWhite` and back.
+/// Each thread cycles separately.
 ///
 /// Examples:
 /// ---
@@ -76,12 +78,15 @@ const(char)[] nextColor() {
 		Ansi.brightBlue, Ansi.brightMagenta, Ansi.brightCyan, Ansi.brightWhite
 	];
 	static size_t index = 0;
+	assert(index < colors.length, "diagnose: a color past the palette");
 	immutable color = colors[index];
 	index = (index + 1) % colors.length;
+	assert(color.length > 2 && color[0] == '\033', "diagnose: a color that is not an escape sequence");
 	return color;
 }
 
-/// The next of the 16 background colors in `Ansi`, from `bgBlack` to `bgBrightWhite` and back. Each thread cycles separately.
+/// The next of the 16 background colors in `Ansi`, from `bgBlack` to `bgBrightWhite` and back.
+/// Each thread cycles separately.
 ///
 /// Examples:
 /// ---
@@ -95,8 +100,10 @@ const(char)[] nextBg() {
 		Ansi.bgBrightBlue, Ansi.bgBrightMagenta, Ansi.bgBrightCyan, Ansi.bgBrightWhite
 	];
 	static size_t index = 0;
+	assert(index < colors.length, "diagnose: a color past the palette");
 	immutable color = colors[index];
 	index = (index + 1) % colors.length;
+	assert(color.length > 2 && color[0] == '\033', "diagnose: a color that is not an escape sequence");
 	return color;
 }
 
@@ -109,7 +116,8 @@ enum Kind {
 	error, /// A problem; `hasErrors` reports whether any were pushed.
 }
 
-/// A message about a range of source, with annotations pointing at other positions, an optional context line, and an optional closing note. It owns its fp strings and annotations; release them with `free`.
+/// A message about a range of source, with annotations pointing at other positions, an optional context line, and an optional closing note.
+/// It owns its fp strings and annotations; release them with `free`.
 struct Diagnostic {
 	/// A message pointing at one position, drawn under its source line with a connector.
 	struct Annotation {
@@ -119,7 +127,9 @@ struct Diagnostic {
 		const(char)[] color = Ansi.magenta; /// The ANSI color its connector is drawn in.
 	}
 
-	/// An edit that resolves the diagnostic, for an editor to offer as a quick fix: `replacement` written over `range`. An empty range inserts, and an empty replacement deletes. `render` does not draw it; say the same in a hint annotation.
+	/// An edit that resolves the diagnostic, for an editor to offer as a quick fix: `replacement` written over `range`.
+	/// An empty range inserts, and an empty replacement deletes.
+	/// `render` does not draw it; say the same in a hint annotation.
 	struct Fix {
 		char* title; /// An owned fp string naming the edit for a menu, such as "Insert `)`".
 		LineColumnRange range; /// What it replaces; an empty `file` means the diagnostic's own file.
@@ -131,7 +141,9 @@ struct Diagnostic {
 	bool hasCode = false; /// Whether the header shows `code`, as `[E001]`.
 	size_t code = 0; /// The code the header shows when `hasCode` is set.
 	char* message; /// An owned fp string, the headline.
-	LineColumnRange location; /// The range it highlights; a column of 0 means the end of the line. An empty `file` means it has no location, such as a file that cannot be read, and renders without source.
+	/// The range it highlights; a column of 0 means the end of the line.
+	/// An empty `file` means it has no location, such as a file that cannot be read, and renders without source.
+	LineColumnRange location;
 	Annotation* annotations; /// An owned fp dynarray.
 	char* contextMessage; /// An owned fp string summarizing what the location is, such as "The values are outputs of this match expression", or null.
 	char* note; /// An owned fp string giving a closing note, such as "Outputs of match expressions must coerce to the same type", or null.
@@ -151,8 +163,12 @@ struct Diagnostic {
 /// assert(diagnostic.annotations[0].position == LineColumn(2, 5));
 /// ---
 bool pushAnnotationAtStart(ref Diagnostic diagnostic, Diagnostic.Annotation annotation) {
+	immutable before = fp.dynarray.length(diagnostic.annotations);
 	annotation.position = diagnostic.location.start;
-	return fp.dynarray.pushBack(diagnostic.annotations, annotation);
+	immutable pushed = fp.dynarray.pushBack(diagnostic.annotations, annotation);
+	assert(fp.dynarray.length(diagnostic.annotations) == before + pushed, "diagnose.pushAnnotationAtStart: added other than one annotation");
+	assert(!pushed || fp.dynarray.back(diagnostic.annotations).position == diagnostic.location.start, "diagnose.pushAnnotationAtStart: an annotation away from the start");
+	return pushed;
 }
 
 /// Appends `annotation` to `diagnostic`, as `fp.dynarray.pushBack` onto its `annotations` does, pointing at the end of `diagnostic.location`.
@@ -168,8 +184,12 @@ bool pushAnnotationAtStart(ref Diagnostic diagnostic, Diagnostic.Annotation anno
 /// assert(diagnostic.annotations[0].position == LineColumn(2, 9));
 /// ---
 bool pushAnnotationAtEnd(ref Diagnostic diagnostic, Diagnostic.Annotation annotation) {
+	immutable before = fp.dynarray.length(diagnostic.annotations);
 	annotation.position = diagnostic.location.end;
-	return fp.dynarray.pushBack(diagnostic.annotations, annotation);
+	immutable pushed = fp.dynarray.pushBack(diagnostic.annotations, annotation);
+	assert(fp.dynarray.length(diagnostic.annotations) == before + pushed, "diagnose.pushAnnotationAtEnd: added other than one annotation");
+	assert(!pushed || fp.dynarray.back(diagnostic.annotations).position == diagnostic.location.end, "diagnose.pushAnnotationAtEnd: an annotation away from the end");
+	return pushed;
 }
 
 /// Frees everything `diagnostic` owns: its messages, its annotations and fixes with their strings, nulling its pointers to them.
@@ -194,6 +214,7 @@ void free(ref Diagnostic diagnostic) @trusted {
 		fp.string.free(fix.replacement);
 	}
 	fp.dynarray.free(diagnostic.fixes);
+	assert(diagnostic.message is null && diagnostic.annotations is null && diagnostic.fixes is null, "diagnose.free: a diagnostic left holding memory");
 }
 
 
@@ -205,6 +226,7 @@ struct SourceFile {
 }
 
 private size_t indexOfFile(const SourceFile* files, const(char)[] filename) @trusted {
+	assert(fp.dynarray.length(files) < fp.pointer.allocationRefused, "diagnose: an index could be read as a sentinel");
 	foreach (i; 0 .. fp.dynarray.length(files))
 		if (files[i].filename == filename) return i;
 	return fp.pointer.notFound;
@@ -212,6 +234,7 @@ private size_t indexOfFile(const SourceFile* files, const(char)[] filename) @tru
 
 private const(SourceFile)* fileNamed(const SourceFile* files, const(char)[] filename) @trusted {
 	immutable i = indexOfFile(files, filename);
+	assert(i == fp.pointer.notFound || i < fp.dynarray.length(files), "diagnose: a file past those registered");
 	return i == fp.pointer.notFound ? null : &files[i];
 }
 
@@ -227,29 +250,35 @@ private size_t* indexLines(const(char)[] source) @trusted {
 			}
 		}
 	}
+	foreach (i; 1 .. fp.dynarray.length(starts)) assert(starts[i - 1] < starts[i] && starts[i] <= source.length, "diagnose: line starts out of order");
+	assert(fp.dynarray.length(starts) == fp.string.lineBreakCount(source) + 1, "diagnose: one line more than line breaks, it is not");
 	return starts;
 }
 
 // Whether `file` has a 1-based line `number`.
 private bool hasLine(ref const SourceFile file, size_t number) {
+	assert(file.lineStarts.p !is null, "diagnose: a source file with no line index");
 	return number != 0 && number <= fp.dynarray.length(file.lineStarts.p);
 }
 
 // The text of 1-based line `number` of `file`, which `hasLine` must accept, without its newline.
 private const(char)[] lineText(ref const SourceFile file, size_t number) @trusted {
-	assert(hasLine(file, number));
+	assert(hasLine(file, number), "diagnose: a line the file does not have");
 	immutable start = file.lineStarts.p[number - 1];
+	assert(start <= file.source.length, "diagnose: a line starting past its file; was the source changed without addSource?");
 	return file.source[start .. fp.string.lineEnd(file.source, start)];
 }
 
-/// Collects diagnostics and the source files they point into, and renders them. Release it with `free`.
+/// Collects diagnostics and the source files they point into, and renders them.
+/// Release it with `free`.
 struct Manager {
 	Diagnostic* diagnostics; /// An owned fp dynarray of the diagnostics pushed.
 	SourceFile* sourceFiles; /// An fp dynarray of the registered files, whose names and text it borrows and whose line indices it owns.
 }
 
 
-/// Registers `source` as the text of `filename`, replacing any earlier registration of `filename`. Both are borrowed, not copied, so end the registration with `removeSource` or `clear` before freeing either; a later registration compares against every registered name.
+/// Registers `source` as the text of `filename`, replacing any earlier registration of `filename`.
+/// Both are borrowed, not copied, so end the registration with `removeSource` or `clear` before freeing either; a later registration compares against every registered name.
 ///
 /// Returns false if an allocation was refused, leaving the registrations as they were.
 ///
@@ -268,10 +297,13 @@ bool addSource(ref Manager manager, const(char)[] filename, const(char)[] source
 	if (i == fp.pointer.notFound) return fp.dynarray.pushBack(manager.sourceFiles, SourceFile(filename, source, starts));
 	manager.sourceFiles[i].source = source;
 	fp.lifecycle.moveInto(manager.sourceFiles[i].lineStarts, starts);
+	assert(starts.p is null, "diagnose.addSource: the moved line index is still held twice");
+	assert(indexOfFile(manager.sourceFiles, filename) == i, "diagnose.addSource: a file registered twice");
 	return true;
 }
 
-/// Ends the registration of `filename`, if there is one, and returns whether there was. Diagnostics already pushed against it still render, noting that its source is unavailable.
+/// Ends the registration of `filename`, if there is one, and returns whether there was.
+/// Diagnostics already pushed against it still render, noting that its source is unavailable.
 ///
 /// Examples:
 /// ---
@@ -285,10 +317,12 @@ bool removeSource(ref Manager manager, const(char)[] filename) @trusted {
 	immutable i = indexOfFile(manager.sourceFiles, filename);
 	if (i == fp.pointer.notFound) return false;
 	cast(void) fp.dynarray.removeAt(manager.sourceFiles, i);
+	assert(indexOfFile(manager.sourceFiles, filename) == fp.pointer.notFound, "diagnose.removeSource: a file registered twice");
 	return true;
 }
 
-/// Appends `diagnostic` to `manager`, which takes over everything it owns. Returns the stored copy, valid until the next `push`, `clear` or `free`.
+/// Appends `diagnostic` to `manager`, which takes over everything it owns.
+/// Returns the stored copy, valid until the next `push`, `clear` or `free`.
 ///
 /// Returns null if an allocation was refused, leaving `manager` unchanged and what `diagnostic` owns still the caller's.
 ///
@@ -302,6 +336,7 @@ bool removeSource(ref Manager manager, const(char)[] filename) @trusted {
 /// assert(stored !is null && stored.message is diagnostic.message);
 /// ---
 Diagnostic* push(ref Manager manager, Diagnostic diagnostic) @trusted {
+	assert(diagnostic.location.start.line <= diagnostic.location.end.line, "diagnose: a location that ends before it starts");
 	if (!fp.dynarray.pushBack(manager.diagnostics, diagnostic)) return null;
 	return &manager.diagnostics[fp.dynarray.length(manager.diagnostics) - 1];
 }
@@ -324,7 +359,8 @@ bool hasErrors(const ref Manager manager) @trusted {
 	return false;
 }
 
-/// Frees every diagnostic pushed to `manager` and ends every registration, keeping `manager` usable. Registrations end too because `manager` cannot know whether the text they borrow outlives the diagnostics; re-register any that should.
+/// Frees every diagnostic pushed to `manager` and ends every registration, keeping `manager` usable.
+/// Registrations end too because `manager` cannot know whether the text they borrow outlives the diagnostics; re-register any that should.
 ///
 /// Examples:
 /// ---
@@ -340,6 +376,8 @@ void clear(ref Manager manager) @trusted {
 		free(manager.diagnostics[i]);
 	fp.dynarray.clear(manager.diagnostics);
 	fp.dynarray.clear(manager.sourceFiles);
+	assert(fp.dynarray.length(manager.diagnostics) == 0 && fp.dynarray.length(manager.sourceFiles) == 0, "diagnose.clear: left diagnostics or files");
+	assert(!hasErrors(manager), "diagnose.clear: errors left behind");
 }
 
 /// Frees `manager`'s diagnostics, everything they own, and its list of registrations, nulling its pointers to them.
@@ -365,7 +403,9 @@ private struct Output {
 }
 
 private void put(Args...)(ref Output output, Args pieces) {
+	immutable before = fp.string.length(output.text);
 	if (!output.failed) output.failed = !fp.string.append(output.text, pieces);
+	assert(fp.string.length(output.text) >= before, "diagnose: rendering lost text");
 }
 
 private void pushOrFail(T)(ref Output output, ref T* array, T value) {
@@ -391,6 +431,7 @@ private size_t digitCount(size_t value) {
 		value /= 10;
 		++count;
 	}
+	assert(count >= 1 && count < fp.string.numbers.maxDecimalLength, "diagnose: more digits than a number has");
 	return count;
 }
 
@@ -399,9 +440,12 @@ private void appendSpaces(ref Output output, size_t n) {
 }
 
 private void appendPadded(ref Output output, size_t value, size_t width) {
+	assert(width < fp.string.numbers.maxDecimalLength, "diagnose: padding wider than any number");
+	immutable before = fp.string.length(output.text);
 	immutable digits = digitCount(value);
 	if (width > digits) appendSpaces(output, width - digits);
 	put(output, value);
+	assert(output.failed || fp.string.length(output.text) - before == (width > digits ? width : digits), "diagnose: a number padded to the wrong width");
 }
 
 // Opens a row of the cyan left margin: a space, `width` blanks in place of a line number, then `marker`, leaving the style reset.
@@ -456,6 +500,7 @@ private immutable uint[2][] wideRanges = [
 ];
 
 private size_t codepointDisplayWidth(uint codepoint) {
+	assert(codepoint <= 0x10FFFF, "diagnose: a codepoint past Unicode");
 	if (codepoint == 0 || fp.string.utf.inRanges(zeroWidthRanges, codepoint)) return 0;
 	if (fp.string.utf.inRanges(wideRanges, codepoint)) return 2;
 	return 1;
@@ -463,6 +508,7 @@ private size_t codepointDisplayWidth(uint codepoint) {
 
 // The terminal column 1-based `byteColumn` of the UTF-8 `line` displays at, counting double- and zero-width codepoints.
 private size_t byteColumnToDisplayColumn(const(char)[] line, size_t byteColumn) {
+	assert(byteColumn >= 1, "diagnose: columns count from 1");
 	immutable target = byteColumn - 1;
 	size_t i = 0;
 	size_t column = 1;
@@ -472,6 +518,7 @@ private size_t byteColumnToDisplayColumn(const(char)[] line, size_t byteColumn) 
 		if (!valid) return byteColumn;
 		column += codepointDisplayWidth(codepoint);
 	}
+	assert(column >= 1 && column <= 2 * byteColumn, "diagnose: a display column no byte column could give");
 	return column;
 }
 
@@ -488,7 +535,9 @@ private bool descByColumn(in AnnotatedColumn a, in AnnotatedColumn b) {
 
 // A column of 0 means the end of the line.
 private size_t effectiveColumn(size_t column, size_t lineLength) {
-	return column == 0 ? lineLength + 1 : column;
+	immutable effective = column == 0 ? lineLength + 1 : column;
+	assert(effective >= 1, "diagnose: columns count from 1");
+	return effective;
 }
 
 private void pushResolved(ref Output output, ref AnnotatedColumn* result, const(Diagnostic.Annotation)* annotation, const(char)[] line) {
@@ -505,6 +554,7 @@ private AnnotatedColumn* collectMainLineAnnotations(ref Output output, ref const
 			pushResolved(output, result, annotation, line);
 	}
 	std.algorithm.sorting.sort!descByColumn(fp.dynarray.slice(result));
+	assert(output.failed || fp.dynarray.length(result) <= fp.dynarray.length(diagnostic.annotations), "diagnose: more annotations on a line than the diagnostic has");
 	return result;
 }
 
@@ -520,6 +570,7 @@ private AnnotatedColumn* collectForeignLineAnnotations(ref Output output, const(
 		if (group[i].position.line == lineNumber)
 			pushResolved(output, result, group[i], line);
 	std.algorithm.sorting.sort!descByColumn(fp.dynarray.slice(result));
+	assert(output.failed || fp.dynarray.length(result) <= fp.dynarray.length(group), "diagnose: more annotations on a line than the group has");
 	return result;
 }
 
@@ -547,6 +598,8 @@ private ForeignGroup* collectForeignGroups(ref Output output, ref const Diagnost
 		}
 	}
 	std.algorithm.sorting.sort!byFileAscending(fp.dynarray.slice(groups));
+	foreach (g; 1 .. fp.dynarray.length(groups)) assert(groups[g - 1].file < groups[g].file, "diagnose: one foreign file in two groups");
+	foreach (g; 0 .. fp.dynarray.length(groups)) assert(groups[g].file != diagnostic.location.file && groups[g].file.length > 0, "diagnose: the diagnostic's own file as a foreign one");
 	return groups;
 }
 
@@ -558,6 +611,7 @@ private void freeForeignGroups(ForeignGroup* groups) @trusted {
 
 private void appendAnnotations(ref Output output, const AnnotatedColumn* sorted, size_t width) @trusted {
 	immutable n = fp.dynarray.length(sorted);
+	foreach (i; 1 .. n) assert(sorted[i - 1].column >= sorted[i].column, "diagnose: annotations not drawn rightmost first");
 	foreach (i; 0 .. n) {
 		put(output, " ");
 		appendGutter(output, width, "│");
@@ -577,9 +631,68 @@ private void appendAnnotations(ref Output output, const AnnotatedColumn* sorted,
 }
 
 private void appendSourceLine(ref Output output, size_t lineNumber, size_t width, const(char)[] kindColor) {
+	assert(lineNumber >= 1, "diagnose: lines count from 1");
+	assert(digitCount(lineNumber) <= width, "diagnose: a line number wider than its gutter");
 	put(output, " ", Ansi.cyan, Ansi.bold);
 	appendPadded(output, lineNumber, width);
 	put(output, " │ ", Ansi.reset, kindColor, "➤ ", Ansi.reset);
+}
+
+// One line of the diagnostic's own file: its text, the part inside the location highlighted, then the annotations on it.
+private void appendMainLine(ref Output output, ref const Diagnostic diagnostic, ref const SourceFile file, size_t lineNumber, size_t width, const(char)[] kindColor) @trusted {
+	assert(width >= 1, "diagnose: a gutter of no width");
+	if (!hasLine(file, lineNumber)) return;
+	immutable startLine = diagnostic.location.start.line, endLine = diagnostic.location.end.line;
+	const(char)[] line = lineText(file, lineNumber);
+	appendSourceLine(output, lineNumber, width, kindColor);
+
+	// A line shown only for its annotations lies outside the location, so nothing on it is highlighted.
+	size_t startColumn = line.length + 1;
+	size_t endColumn = line.length + 1;
+	if (lineNumber >= startLine && lineNumber <= endLine) {
+		if (lineNumber == startLine) startColumn = std.algorithm.comparison.min(effectiveColumn(diagnostic.location.start.column, line.length), line.length + 1);
+		else startColumn = 1;
+		if (lineNumber == endLine) endColumn = std.algorithm.comparison.max(startColumn, std.algorithm.comparison.min(effectiveColumn(diagnostic.location.end.column, line.length), line.length + 1));
+	}
+	assert(1 <= startColumn && startColumn <= endColumn && endColumn <= line.length + 1, "diagnose: a highlight outside its line");
+	put(output, line[0 .. startColumn - 1]);
+	if (endColumn > startColumn) put(output, kindColor, Ansi.bold, line[startColumn - 1 .. endColumn - 1], Ansi.reset);
+	put(output, line[endColumn - 1 .. $], "\n");
+
+	AnnotatedColumn* annotations = collectMainLineAnnotations(output, diagnostic, lineNumber, line);
+	scope(exit) fp.dynarray.free(annotations);
+	appendAnnotations(output, annotations, width);
+}
+
+// The annotations in another file: its name, then each annotated line with its annotations, or a notice if its source was not given.
+private void appendForeignGroup(ref Output output, ref ForeignGroup group, const SourceFile* sourceFiles, size_t width, const(char)[] kindColor) @trusted {
+	appendContinuationRow(output, width);
+	put(output, " ", Ansi.cyan, Ansi.bold, "┌─ <\"", group.file, "\">", Ansi.reset, "\n");
+
+	const foreign = fileNamed(sourceFiles, group.file);
+	if (foreign is null) {
+		put(output, " ", Ansi.yellow, Ansi.bold, "(source not available)", Ansi.reset, "\n");
+		return;
+	}
+
+	size_t* lineNumbers = null;
+	scope(exit) fp.dynarray.free(lineNumbers);
+	foreach (a; 0 .. fp.dynarray.length(group.annotations))
+		pushOrFail(output, lineNumbers, group.annotations[a].position.line);
+	fp.algorithms.sortUnique(lineNumbers);
+	assert(output.failed || fp.dynarray.length(lineNumbers) <= fp.dynarray.length(group.annotations), "diagnose: more lines than annotations in a group");
+
+	foreach (i; 0 .. fp.dynarray.length(lineNumbers)) {
+		immutable lineNumber = lineNumbers[i];
+		if (!hasLine(*foreign, lineNumber)) continue;
+		const(char)[] line = lineText(*foreign, lineNumber);
+		appendSourceLine(output, lineNumber, width, kindColor);
+		put(output, line, "\n");
+
+		AnnotatedColumn* annotations = collectForeignLineAnnotations(output, group.annotations, lineNumber, line);
+		scope(exit) fp.dynarray.free(annotations);
+		appendAnnotations(output, annotations, width);
+	}
 }
 
 private void appendSourceContext(ref Output output, ref const Diagnostic diagnostic, ref const SourceFile file, const SourceFile* sourceFiles) @trusted {
@@ -588,7 +701,9 @@ private void appendSourceContext(ref Output output, ref const Diagnostic diagnos
 
 	size_t* lineNumbers = null;
 	scope(exit) fp.dynarray.free(lineNumbers);
-	foreach (line; startLine .. endLine + 1)
+	// Only lines the file has are drawn, so a location running past its end costs no more than the file.
+	immutable lastLine = std.algorithm.comparison.min(endLine, fp.dynarray.length(file.lineStarts.p));
+	foreach (line; startLine .. lastLine + 1)
 		pushOrFail(output, lineNumbers, line);
 	foreach (i; 0 .. fp.dynarray.length(diagnostic.annotations)) {
 		const annotation = &diagnostic.annotations[i];
@@ -596,6 +711,8 @@ private void appendSourceContext(ref Output output, ref const Diagnostic diagnos
 			pushOrFail(output, lineNumbers, annotation.position.line);
 	}
 	fp.algorithms.sortUnique(lineNumbers);
+	foreach (i; 1 .. fp.dynarray.length(lineNumbers)) assert(lineNumbers[i - 1] < lineNumbers[i], "diagnose: lines drawn out of order or twice");
+	assert(lastLine <= fp.dynarray.length(file.lineStarts.p), "diagnose: drawing lines past the file's end");
 
 	ForeignGroup* groups = collectForeignGroups(output, diagnostic);
 	scope(exit) freeForeignGroups(groups);
@@ -606,59 +723,11 @@ private void appendSourceContext(ref Output output, ref const Diagnostic diagnos
 		foreach (a; 0 .. fp.dynarray.length(groups[g].annotations))
 			widest = std.algorithm.comparison.max(widest, groups[g].annotations[a].position.line);
 	immutable width = digitCount(widest);
+	assert(diagnostic.kind <= Kind.max, "diagnose: a kind with no style");
 	immutable kindColor = kindStyles[diagnostic.kind].color;
 
-	foreach (i; 0 .. fp.dynarray.length(lineNumbers)) {
-		immutable lineNumber = lineNumbers[i];
-		if (!hasLine(file, lineNumber)) continue;
-		const(char)[] line = lineText(file, lineNumber);
-		appendSourceLine(output, lineNumber, width, kindColor);
-
-		// A line shown only for its annotations lies outside the location, so nothing on it is highlighted.
-		size_t startColumn = line.length + 1;
-		size_t endColumn = line.length + 1;
-		if (lineNumber >= startLine && lineNumber <= endLine) {
-			if (lineNumber == startLine) startColumn = std.algorithm.comparison.min(effectiveColumn(diagnostic.location.start.column, line.length), line.length + 1);
-			else startColumn = 1;
-			if (lineNumber == endLine) endColumn = std.algorithm.comparison.max(startColumn, std.algorithm.comparison.min(effectiveColumn(diagnostic.location.end.column, line.length), line.length + 1));
-		}
-		put(output, line[0 .. startColumn - 1]);
-		if (endColumn > startColumn) put(output, kindColor, Ansi.bold, line[startColumn - 1 .. endColumn - 1], Ansi.reset);
-		put(output, line[endColumn - 1 .. $], "\n");
-
-		AnnotatedColumn* annotations = collectMainLineAnnotations(output, diagnostic, lineNumber, line);
-		scope(exit) fp.dynarray.free(annotations);
-		appendAnnotations(output, annotations, width);
-	}
-
-	foreach (g; 0 .. fp.dynarray.length(groups)) {
-		appendContinuationRow(output, width);
-		put(output, " ", Ansi.cyan, Ansi.bold, "┌─ <\"", groups[g].file, "\">", Ansi.reset, "\n");
-
-		const foreign = fileNamed(sourceFiles, groups[g].file);
-		if (foreign is null) {
-			put(output, " ", Ansi.yellow, Ansi.bold, "(source not available)", Ansi.reset, "\n");
-			continue;
-		}
-
-		size_t* foreignLineNumbers = null;
-		scope(exit) fp.dynarray.free(foreignLineNumbers);
-		foreach (a; 0 .. fp.dynarray.length(groups[g].annotations))
-			pushOrFail(output, foreignLineNumbers, groups[g].annotations[a].position.line);
-		fp.algorithms.sortUnique(foreignLineNumbers);
-
-		foreach (i; 0 .. fp.dynarray.length(foreignLineNumbers)) {
-			immutable lineNumber = foreignLineNumbers[i];
-			if (!hasLine(*foreign, lineNumber)) continue;
-			const(char)[] line = lineText(*foreign, lineNumber);
-			appendSourceLine(output, lineNumber, width, kindColor);
-			put(output, line, "\n");
-
-			AnnotatedColumn* annotations = collectForeignLineAnnotations(output, groups[g].annotations, lineNumber, line);
-			scope(exit) fp.dynarray.free(annotations);
-			appendAnnotations(output, annotations, width);
-		}
-	}
+	foreach (i; 0 .. fp.dynarray.length(lineNumbers)) appendMainLine(output, diagnostic, file, lineNumbers[i], width, kindColor);
+	foreach (g; 0 .. fp.dynarray.length(groups)) appendForeignGroup(output, groups[g], sourceFiles, width, kindColor);
 
 	appendContinuationRow(output, width);
 	appendContinuationRow(output, width);
@@ -675,6 +744,8 @@ private void appendSourceContext(ref Output output, ref const Diagnostic diagnos
 }
 
 private void appendHeader(ref Output output, ref const Diagnostic diagnostic) @trusted {
+	assert(diagnostic.kind <= Kind.max, "diagnose: a kind with no style");
+	assert(fp.string.length(diagnostic.message) > 0, "diagnose: a diagnostic with no message");
 	immutable style = kindStyles[diagnostic.kind];
 	if (diagnostic.hasCode) {
 		put(output, Ansi.bold, style.color, "[E");
@@ -701,6 +772,8 @@ private void appendSummary(ref Output output, const ref Manager manager) @truste
 		if (manager.diagnostics[i].kind == Kind.error) ++errors;
 		else if (manager.diagnostics[i].kind == Kind.warning) ++warnings;
 	}
+	assert(errors + warnings <= fp.dynarray.length(manager.diagnostics), "diagnose: counted more diagnostics than there are");
+	assert((errors > 0) == hasErrors(manager), "diagnose: an error count that disagrees with hasErrors");
 	if (errors == 0 && warnings == 0) return;
 
 	put(output, Ansi.bold);
@@ -711,7 +784,9 @@ private void appendSummary(ref Output output, const ref Manager manager) @truste
 }
 
 
-/// Renders every diagnostic pushed to `manager` into a new fp string: each one's header, the source lines it points at with its annotations, then a count of errors and warnings. A diagnostic with no location shows only its header and closing note. The caller frees it with `fp.string.free`.
+/// Renders every diagnostic pushed to `manager` into a new fp string: each one's header, the source lines it points at with its annotations, then a count of errors and warnings.
+/// A diagnostic with no location shows only its header and closing note.
+/// The caller frees it with `fp.string.free`.
 ///
 /// Returns null if nothing was pushed, or if an allocation was refused.
 ///
@@ -746,6 +821,8 @@ char* render(const ref Manager manager) @trusted {
 	}
 	appendSummary(output, manager);
 	if (output.failed) fp.string.free(output.text);
+	assert(!output.failed || output.text is null, "diagnose.render: kept text from a refused render");
+	assert(output.failed || fp.dynarray.length(manager.diagnostics) == 0 || fp.string.length(output.text) > 0, "diagnose.render: diagnostics rendered as nothing");
 	return output.text;
 }
 
@@ -1134,4 +1211,49 @@ unittest {
 		assert(printAll(manager, scratch.descriptor));
 		assert(printedLength(scratch) == fp.string.length(expected));
 	}
+}
+
+unittest { // random sources, locations and annotations, in and far outside the text: every one renders, in time the sources bound, and a refused allocation gives null
+	static import fp.algorithms;
+	static immutable string[6] pieces = ["int x = y;", "", "\tλ → \"text\"", "a", "    return 0;  ", "é"];
+	static immutable string[3] breaks = ["\n", "\r\n", "\r"];
+	static immutable string[3] names = ["a.c", "b.c", "missing.c"];
+	static immutable size_t[4] far = [0, size_t.max, size_t.max - 1, size_t.max / 2];
+	auto random = fp.algorithms.createRandom(2026);
+	size_t pick(size_t within) { return fp.algorithms.randomChance(random, 1, 6) ? far[fp.algorithms.randomBelow(random, far.length)] : fp.algorithms.randomBelow(random, within + 3); }
+	size_t refusals = 0;
+	foreach (round; 0 .. 300) {
+		char*[2] sources;
+		scope(exit) foreach (source; sources) fp.string.free(source);
+		Manager manager;
+		scope(exit) free(manager);
+		foreach (f; 0 .. 2) {
+			immutable lines = fp.algorithms.randomBelow(random, 6);
+			foreach (l; 0 .. lines) assert(fp.string.concatenate(sources[f], pieces[fp.algorithms.randomBelow(random, pieces.length)]) && fp.string.concatenate(sources[f], breaks[fp.algorithms.randomBelow(random, breaks.length)]));
+			assert(addSource(manager, names[f], fp.string.slice(sources[f])));
+		}
+		immutable count = 1 + fp.algorithms.randomBelow(random, 3);
+		foreach (d; 0 .. count) {
+			const(char)[] file = fp.algorithms.randomChance(random, 1, 8) ? "" : names[fp.algorithms.randomBelow(random, names.length)];
+			// A location ends where it starts or later, as `push` asserts; either line may still lie past its file's end.
+			immutable firstLine = pick(6), lastLine = pick(6);
+			immutable start = LineColumn(firstLine < lastLine ? firstLine : lastLine, pick(16)), end = LineColumn(firstLine < lastLine ? lastLine : firstLine, pick(16));
+			Diagnostic diagnostic = makeDiagnostic(cast(Kind) fp.algorithms.randomBelow(random, Kind.max + 1), "the message", LineColumnRange(file, start, end));
+			foreach (a; 0 .. fp.algorithms.randomBelow(random, 4)) {
+				const(char)[] where = fp.algorithms.randomChance(random, 1, 2) ? "" : names[fp.algorithms.randomBelow(random, names.length)];
+				assert(fp.dynarray.pushBack(diagnostic.annotations, makeAnnotation(LineColumn(pick(6), pick(16)), where, "noted")));
+			}
+			if (fp.algorithms.randomChance(random, 1, 3)) diagnostic.note = fp.string.clone("a note").get;
+			pushTo(manager, diagnostic);
+		}
+		assert(renders(manager, "the message"));
+
+		auto previous = fp.testing.limitAllocations(fp.algorithms.randomBelow(random, 12));
+		char* rationed = render(manager);
+		fp.testing.restoreAllocator(previous);
+		refusals += rationed is null;
+		assert(rationed is null || fp.string.contains(rationed, "the message", 0));
+		fp.string.free(rationed);
+	}
+	assert(refusals > 30);
 }
